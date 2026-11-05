@@ -9,8 +9,35 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    name: Validate release tag
+    steps:
+      - name: Require a version tag
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::Run Build & Release against a version tag, or use Prepare Release on main."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Match tag to app version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v${VERSION}" ]; then
+            echo "::error::Tag must match the app version: v${VERSION}"
+            exit 1
+          fi
+
   build:
+    needs: validate-release
     strategy:
       fail-fast: false
       matrix:
@@ -436,7 +463,8 @@ jobs:
             skills-manager-cli-macOS-arm64 \
             skills-manager-cli-macOS-x64 \
             skills-manager-cli-Windows-x64.exe \
-            skills-manager-cli-Linux-x64; do
+            skills-manager-cli-Linux-x64 \
+            skills-manager-cli-Linux-arm64; do
             if ! echo "$asset_names" | grep -qx "$cli_asset"; then
               echo "Missing CLI release asset: ${cli_asset}" >&2
               fail=1
@@ -453,7 +481,7 @@ jobs:
 
           # v1.29.0 published with no darwin entries at all because only Windows
           # and Linux were asserted here, so every shipped platform is checked now.
-          for platform in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64; do
+          for platform in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64 linux-aarch64; do
             if ! jq -e --arg p "$platform" '.platforms[$p].signature and .platforms[$p].url' /tmp/latest.json >/dev/null; then
               echo "latest.json is missing a signed updater entry for ${platform}" >&2
               fail=1
