@@ -59,6 +59,7 @@ import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
 import { ToggleSwitch } from "../components/ToggleSwitch";
+import { EvaluationSettingsSection } from "../components/EvaluationSettingsSection";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import { getErrorMessage } from "../lib/error";
@@ -1642,6 +1643,8 @@ export function Settings() {
             </div>
           </div>
         </section>
+
+        <EvaluationSettingsSection />
 
         {/* Git sync config */}
         <section>

@@ -26,6 +26,7 @@ import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
+import { SkillEvaluationSection } from "./SkillEvaluationSection";
 import { SyncDots } from "./SyncDots";
 
 interface Props {
@@ -327,6 +328,8 @@ function SkillDetailPanelContent({
           onChanged={onProjectsChanged}
         />
       )}
+
+      <SkillEvaluationSection skill={skill} />
 
       {supportsSourceDiff && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
