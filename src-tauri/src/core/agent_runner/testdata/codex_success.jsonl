@@ -1,0 +1,9 @@
+{"type":"_synthetic_fixture","note":"SYNTHETIC: hand-written from the openai/codex docs and exec_events.rs (read 2026-11-09), not captured from a real run. Unknown event types such as this one are ignored by the parser."}
+{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Reading the evaluator instructions first**"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'cat /skills/skill-judge/SKILL.md'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'cat /skills/skill-judge/SKILL.md'","aggregated_output":"---\nname: skill-judge\n---\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"I have read both skills and will now score the target."}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"{\"schema_version\":1,\"verdict\":\"A correct but thin API cheat-sheet.\",\"score\":{\"value\":57,\"max\":120},\"grade\":\"F\",\"dimensions\":null,\"findings\":[{\"severity\":\"critical\",\"title\":\"Description has no WHEN clause\",\"detail\":\"States WHAT only.\",\"location\":\"SKILL.md:3\",\"suggestion\":null}],\"report_markdown\":\"# Skill Evaluation Report: gif-search\\n\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":1220,"reasoning_output_tokens":640}}

@@ -1,0 +1,5 @@
+{"type":"_synthetic_fixture","note":"SYNTHETIC: hand-written from the openai/codex docs and exec_events.rs (read 2026-11-09), not captured from a real run. The 401 wording is a guess at what a rejected credential looks like."}
+{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a54"}
+{"type":"turn.started"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Your authentication token has expired. Please sign in again."}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Your authentication token has expired. Please sign in again."}}
