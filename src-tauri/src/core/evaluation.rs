@@ -78,7 +78,9 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 }
 
 fn setting(store: &SkillStore, key: &str) -> Result<Option<String>, AppError> {
-    Ok(non_empty(store.get_setting(key).map_err(AppError::db)?.as_deref()))
+    Ok(non_empty(
+        store.get_setting(key).map_err(AppError::db)?.as_deref(),
+    ))
 }
 
 impl EvaluateOptions {
@@ -91,9 +93,7 @@ impl EvaluateOptions {
         };
         let evaluator = match non_empty(self.evaluator.as_deref()) {
             Some(evaluator) => evaluator,
-            None => {
-                setting(store, SETTING_EVALUATOR)?.unwrap_or_else(|| DEFAULT_EVALUATOR.into())
-            }
+            None => setting(store, SETTING_EVALUATOR)?.unwrap_or_else(|| DEFAULT_EVALUATOR.into()),
         };
         let model = match non_empty(self.model.as_deref()) {
             Some(model) => Some(model),
@@ -577,7 +577,10 @@ fn skill_dir(skill: &SkillRecord) -> Result<PathBuf, AppError> {
 fn skill_md_in(dir: &Path, skill_name: &str) -> Result<PathBuf, AppError> {
     let entries = std::fs::read_dir(dir).map_err(AppError::io)?;
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().eq_ignore_ascii_case("SKILL.md")
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("SKILL.md")
             && entry.path().is_file()
         {
             return Ok(entry.path());
@@ -799,7 +802,13 @@ mod tests {
         let result = parse_result(&answer).unwrap();
         assert!(result.findings.is_empty());
         assert_eq!(result.dimensions[0].score, Some(15.0));
-        assert_eq!(result.score, Some(Score { value: 97.0, max: 120.0 }));
+        assert_eq!(
+            result.score,
+            Some(Score {
+                value: 97.0,
+                max: 120.0
+            })
+        );
         // Extra fields survive a round trip through storage.
         let stored = serde_json::to_value(&result).unwrap();
         assert_eq!(stored["evaluator_extra"], json!({"k": 1}));
@@ -860,7 +869,11 @@ mod tests {
         let store = store_in(tmp.path());
         store.set_setting(SETTING_TIMEOUT_SECS, "ten").unwrap();
         let err = EvaluateOptions::default().resolve(&store).unwrap_err();
-        assert!(err.message.contains(SETTING_TIMEOUT_SECS), "{}", err.message);
+        assert!(
+            err.message.contains(SETTING_TIMEOUT_SECS),
+            "{}",
+            err.message
+        );
 
         store.set_setting(SETTING_TIMEOUT_SECS, "").unwrap();
         store.set_setting(SETTING_BUDGET_USD, "-1").unwrap();
@@ -1054,14 +1067,20 @@ mod tests {
         assert_eq!(record.result.as_ref().unwrap().grade.as_deref(), Some("B"));
         assert_eq!(record.report_md.as_deref(), Some("# Report"));
         assert!(!record.stale);
-        assert_eq!(f.store.list_evaluations(&f.target.id).unwrap(), vec![record.clone()]);
+        assert_eq!(
+            f.store.list_evaluations(&f.target.id).unwrap(),
+            vec![record.clone()]
+        );
 
         // What the agent was given: an empty cwd under the work root, and the
         // target and evaluator as absolute read-only dirs named in the prompt.
         let request = agent.seen.lock().unwrap().clone().unwrap();
         assert!(request.cwd.starts_with(&f.work_root));
         let judge_dir = target_dir.parent().unwrap().join("skill-judge");
-        assert_eq!(request.extra_read_dirs, vec![target_dir.clone(), judge_dir.clone()]);
+        assert_eq!(
+            request.extra_read_dirs,
+            vec![target_dir.clone(), judge_dir.clone()]
+        );
         assert!(request
             .prompt
             .contains(&judge_dir.join("SKILL.md").display().to_string()));
@@ -1130,7 +1149,10 @@ mod tests {
 
         assert_eq!(err.kind, ErrorKind::NotFound);
         assert!(err.message.contains("skill-judge"), "{}", err.message);
-        assert!(agent.seen.lock().unwrap().is_none(), "the agent must not run");
+        assert!(
+            agent.seen.lock().unwrap().is_none(),
+            "the agent must not run"
+        );
         assert!(f.store.list_evaluations(&f.target.id).unwrap().is_empty());
         let audit = f.store.list_audit(None).unwrap();
         assert_eq!(audit.len(), 1);

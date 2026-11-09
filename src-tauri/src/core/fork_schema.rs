@@ -366,13 +366,23 @@ mod tests {
         let store = SkillStore::new(&db).unwrap();
         store.insert_skill(&skill("a", "h1")).unwrap();
         store
-            .insert_evaluation(&evaluation("e1", "a", "h1", 1, EvaluationStatus::Succeeded, "A"))
+            .insert_evaluation(&evaluation(
+                "e1",
+                "a",
+                "h1",
+                1,
+                EvaluationStatus::Succeeded,
+                "A",
+            ))
             .unwrap();
         drop(store);
 
         let conn = Connection::open(&db).unwrap();
         let version = user_version(&conn);
-        assert_eq!(version, 9, "the fork must not bump upstream's schema version");
+        assert_eq!(
+            version, 9,
+            "the fork must not bump upstream's schema version"
+        );
         ensure_fork_schema(&conn).unwrap();
         ensure_fork_schema(&conn).unwrap();
         assert_eq!(user_version(&conn), version);
@@ -389,7 +399,14 @@ mod tests {
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
         store.insert_skill(&skill("a", "h1")).unwrap();
         store
-            .insert_evaluation(&evaluation("e1", "a", "h1", 1, EvaluationStatus::Succeeded, "A"))
+            .insert_evaluation(&evaluation(
+                "e1",
+                "a",
+                "h1",
+                1,
+                EvaluationStatus::Succeeded,
+                "A",
+            ))
             .unwrap();
         assert!(!store.list_evaluations("a").unwrap()[0].stale);
 
@@ -433,7 +450,14 @@ mod tests {
         let db_hash = record.content_hash.clone().unwrap();
         store.insert_skill(&record).unwrap();
         store
-            .insert_evaluation(&evaluation("e1", "a", &db_hash, 1, EvaluationStatus::Succeeded, "A"))
+            .insert_evaluation(&evaluation(
+                "e1",
+                "a",
+                &db_hash,
+                1,
+                EvaluationStatus::Succeeded,
+                "A",
+            ))
             .unwrap();
 
         // Unedited: the live hash agrees with the one stored with the run.
@@ -464,17 +488,34 @@ mod tests {
                 .unwrap();
         }
         store
-            .insert_evaluation(&evaluation("e1", "same", "h1", 1, EvaluationStatus::Succeeded, "A"))
+            .insert_evaluation(&evaluation(
+                "e1",
+                "same",
+                "h1",
+                1,
+                EvaluationStatus::Succeeded,
+                "A",
+            ))
             .unwrap();
         store
-            .insert_evaluation(&evaluation("e2", "changed", "h1", 2, EvaluationStatus::Succeeded, "A"))
+            .insert_evaluation(&evaluation(
+                "e2",
+                "changed",
+                "h1",
+                2,
+                EvaluationStatus::Succeeded,
+                "A",
+            ))
             .unwrap();
 
         // A missing directory would hash as an empty one; the DB hash is used.
         assert!(!store.list_evaluations("same").unwrap()[0].stale);
         assert!(store.list_evaluations("changed").unwrap()[0].stale);
         let summaries = store.latest_evaluation_summaries().unwrap();
-        let stale: Vec<_> = summaries.iter().map(|s| (s.skill_id.as_str(), s.stale)).collect();
+        let stale: Vec<_> = summaries
+            .iter()
+            .map(|s| (s.skill_id.as_str(), s.stale))
+            .collect();
         assert_eq!(stale, [("changed", true), ("same", false)]);
     }
 
@@ -485,10 +526,19 @@ mod tests {
         let record = skill_on_disk(tmp.path(), "a");
         let hash = record.content_hash.clone().unwrap();
         store.insert_skill(&record).unwrap();
-        store.insert_skill(&skill_on_disk(tmp.path(), "never")).unwrap();
+        store
+            .insert_skill(&skill_on_disk(tmp.path(), "never"))
+            .unwrap();
         for (id, started_at) in [("e1", 1), ("e2", 2), ("e3", 3)] {
             store
-                .insert_evaluation(&evaluation(id, "a", &hash, started_at, EvaluationStatus::Succeeded, "A"))
+                .insert_evaluation(&evaluation(
+                    id,
+                    "a",
+                    &hash,
+                    started_at,
+                    EvaluationStatus::Succeeded,
+                    "A",
+                ))
                 .unwrap();
         }
 
@@ -508,7 +558,14 @@ mod tests {
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
         store.insert_skill(&skill("a", "h1")).unwrap();
         store
-            .insert_evaluation(&evaluation("e1", "a", "h1", 1, EvaluationStatus::Succeeded, "A"))
+            .insert_evaluation(&evaluation(
+                "e1",
+                "a",
+                "h1",
+                1,
+                EvaluationStatus::Succeeded,
+                "A",
+            ))
             .unwrap();
         store.delete_skill("a").unwrap();
         assert!(store.get_evaluation("e1").unwrap().is_none());
