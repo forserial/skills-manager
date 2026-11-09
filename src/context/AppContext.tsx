@@ -6,8 +6,9 @@ import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
 import { toast } from "sonner";
+import { useEvaluationRuns, type EvaluationContextState } from "./useEvaluationRuns";
 
-interface AppState {
+interface AppState extends EvaluationContextState {
   presets: Preset[];
   /** Backend-tracked "last applied to default targets". Drives the "Applied to..." status, not the sidebar selection. */
   activePreset: Preset | null;
@@ -67,6 +68,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const appUpdateCheckedRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
   const lastActivePresetIdRef = useRef<string | null>(null);
+  const evaluation = useEvaluationRuns();
 
   const setTranslatedError = useCallback((key: string) => {
     setAppError(i18n.t("common.loadFailed", { item: i18n.t(key) }));
@@ -463,6 +465,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         closeHelp: () => setHelpOpen(false),
         openSkillDetailById: (skillId: string) => setDetailSkillId(skillId),
         closeSkillDetail: () => setDetailSkillId(null),
+        ...evaluation,
       }}
     >
       {children}

@@ -1134,6 +1134,12 @@ pub fn run() {
             commands::projects::reorder_projects,
             commands::presets::get_preset_skill_order,
             commands::presets::reorder_preset_skills,
+            // Evaluation (fork)
+            commands::evaluation::start_skill_evaluation,
+            commands::evaluation::cancel_skill_evaluation,
+            commands::evaluation::get_skill_evaluations,
+            commands::evaluation::get_evaluation_summaries,
+            commands::evaluation::list_agent_runners,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
