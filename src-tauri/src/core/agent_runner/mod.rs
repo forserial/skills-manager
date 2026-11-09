@@ -12,6 +12,7 @@
 //! them for callers that have a store.
 
 pub mod claude_code;
+pub mod codex;
 pub mod resolve;
 
 use std::fmt;
@@ -192,6 +193,21 @@ pub trait AgentAdapter: Send + Sync {
     /// agent's own verdict; the runner combines it with the exit status.
     /// Unknown or uninteresting lines give `None`.
     fn parse_line(&self, line: &str) -> Option<RunEvent>;
+
+    /// Whether the adapter has not yet been proven against a real install.
+    /// The agent picker labels such adapters "experimental".
+    fn experimental(&self) -> bool {
+        false
+    }
+
+    /// The line parser for one run. The runner calls this once per run and
+    /// feeds it every stdout line in order. The default is the stateless
+    /// [`parse_line`](Self::parse_line); adapters whose verdict spans
+    /// several lines (Codex: the answer, then the usage) keep per-run state
+    /// here instead of in `self`, which is shared between runs.
+    fn line_parser(&self) -> Box<dyn FnMut(&str) -> Option<RunEvent> + '_> {
+        Box::new(move |line| self.parse_line(line))
+    }
 }
 
 #[derive(Debug)]
@@ -301,12 +317,13 @@ fn run_inner(
     // The agent's own verdict. The first failure wins: an auth error is
     // followed by a generic error result, and the auth error is the useful one.
     let mut verdict: Option<RunEvent> = None;
+    let mut parse = adapter.line_parser();
     let outcome = process::run_watched(
         cmd,
         Some(request.prompt.clone().into_bytes()),
         cancel,
         request.timeout,
-        |line| match adapter.parse_line(line) {
+        |line| match parse(line) {
             Some(event @ (RunEvent::Finished { .. } | RunEvent::Failed { .. })) => {
                 match (&mut verdict, event) {
                     // Keep the first failure, but take the spend the final
