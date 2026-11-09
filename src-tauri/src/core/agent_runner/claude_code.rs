@@ -154,6 +154,7 @@ pub fn parse_line(line: &str) -> Option<RunEvent> {
                 return Some(RunEvent::Failed {
                     kind: FailureKind::Auth,
                     message: AUTH_MESSAGE.to_string(),
+                    usage: None,
                 });
             }
             let steps: Vec<String> = event
@@ -179,29 +180,112 @@ pub fn parse_line(line: &str) -> Option<RunEvent> {
     }
 }
 
+/// A limit the CLI stopped on, read from `subtype` / `terminal_reason`.
+///
+/// `subtype` is never trusted to mean success ("success" is reported on
+/// failures too), but an `error_*` subtype names the cause well.
+#[derive(Debug, PartialEq, Eq)]
+enum LimitStop {
+    Budget,
+    MaxTurns,
+}
+
+fn limit_stop(event: &Value) -> Option<LimitStop> {
+    let fields: Vec<String> = ["subtype", "terminal_reason"]
+        .iter()
+        .filter_map(|key| event.get(*key).and_then(Value::as_str))
+        .map(str::to_ascii_lowercase)
+        .collect();
+    if fields.iter().any(|f| f.contains("budget")) {
+        Some(LimitStop::Budget)
+    } else if fields.iter().any(|f| f.contains("max_turns")) {
+        Some(LimitStop::MaxTurns)
+    } else {
+        None
+    }
+}
+
+/// "(subtype error_during_execution, terminal reason api_error)", leaving out
+/// a "success" subtype, which says nothing on a failure.
+fn reason_suffix(event: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(subtype) = event.get("subtype").and_then(Value::as_str) {
+        if subtype != "success" && !subtype.is_empty() {
+            parts.push(format!("subtype {subtype}"));
+        }
+    }
+    if let Some(reason) = event.get("terminal_reason").and_then(Value::as_str) {
+        if !reason.is_empty() {
+            parts.push(format!("terminal reason {reason}"));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
 fn parse_result(event: &Value) -> RunEvent {
-    if event.get("is_error").and_then(Value::as_bool) == Some(true) {
+    let usage = Some(usage_of(event));
+    let is_error = event.get("is_error").and_then(Value::as_bool) == Some(true);
+    let structured = match event.get("structured_output") {
+        Some(output @ Value::Object(_)) if !is_error => Some(output.clone()),
+        _ => None,
+    };
+    if let Some(output_json) = structured {
+        return RunEvent::Finished {
+            output_json,
+            usage: usage.unwrap_or_default(),
+        };
+    }
+
+    // A failure. A limit stop is named whether or not is_error is set: a run
+    // cut off by a limit can end without a structured result either way.
+    match limit_stop(event) {
+        Some(LimitStop::Budget) => {
+            return RunEvent::Failed {
+                kind: FailureKind::BudgetExceeded,
+                // The runner rewrites this with the cap from the request.
+                message: "Claude Code stopped after reaching the spend cap.".to_string(),
+                usage,
+            };
+        }
+        Some(LimitStop::MaxTurns) => {
+            return RunEvent::Failed {
+                kind: FailureKind::AgentError,
+                message: format!(
+                    "Claude Code stopped after reaching its turn limit{} without finishing.",
+                    event
+                        .get("num_turns")
+                        .and_then(Value::as_u64)
+                        .map(|n| format!(" ({n} turns)"))
+                        .unwrap_or_default()
+                ),
+                usage,
+            }
+        }
+        None => {}
+    }
+
+    if is_error {
         let message = match event.get("result").and_then(Value::as_str).map(str::trim) {
             Some(text) if !text.is_empty() => truncate(text, ERROR_MESSAGE_CHARS),
-            _ => match event.get("terminal_reason").and_then(Value::as_str) {
-                Some(reason) => format!("Claude Code reported an error ({reason})."),
-                None => "Claude Code reported an error.".to_string(),
-            },
+            _ => format!("Claude Code reported an error{}.", reason_suffix(event)),
         };
         return RunEvent::Failed {
             kind: FailureKind::AgentError,
             message,
+            usage,
         };
     }
-    match event.get("structured_output") {
-        Some(output @ Value::Object(_)) => RunEvent::Finished {
-            output_json: output.clone(),
-            usage: usage_of(event),
-        },
-        _ => RunEvent::Failed {
-            kind: FailureKind::InvalidOutput,
-            message: "Claude Code finished without a structured result.".to_string(),
-        },
+    RunEvent::Failed {
+        kind: FailureKind::InvalidOutput,
+        message: format!(
+            "Claude Code finished without a structured result{}.",
+            reason_suffix(event)
+        ),
+        usage,
     }
 }
 
@@ -300,30 +384,99 @@ mod tests {
             events[1],
             RunEvent::Failed {
                 kind: FailureKind::Auth,
-                message: AUTH_MESSAGE.into()
+                message: AUTH_MESSAGE.into(),
+                usage: None,
             }
         );
         // The result says subtype "success"; is_error is what counts.
+        let RunEvent::Failed {
+            kind,
+            message,
+            usage,
+        } = &events[2]
+        else {
+            panic!("expected Failed, got {:?}", events[2]);
+        };
+        assert_eq!(*kind, FailureKind::AgentError);
         assert_eq!(
-            events[2],
-            RunEvent::Failed {
-                kind: FailureKind::AgentError,
-                message: "Failed to authenticate: OAuth session expired and could not be refreshed"
-                    .into()
-            }
+            message,
+            "Failed to authenticate: OAuth session expired and could not be refreshed"
         );
+        assert_eq!(usage.as_ref().unwrap().total_cost_usd, Some(0.0));
     }
 
     #[test]
     fn result_without_structured_output_is_invalid_output() {
-        let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"{\"a\":1}"}"#;
-        assert!(matches!(
-            parse_line(line),
+        let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"{\"a\":1}","terminal_reason":"completed"}"#;
+        let Some(RunEvent::Failed { kind, message, .. }) = parse_line(line) else {
+            panic!("expected Failed");
+        };
+        assert_eq!(kind, FailureKind::InvalidOutput);
+        // The terminal reason is named; a "success" subtype is not.
+        assert_eq!(
+            message,
+            "Claude Code finished without a structured result (terminal reason completed)."
+        );
+    }
+
+    // SYNTHETIC: no budget-exceeded or max-turns run was captured by the
+    // spike. These result lines are hand-written from the documented
+    // `error_max_budget_usd` / `error_max_turns` subtypes, with the fields a
+    // real result event carries.
+
+    fn failed(line: &str) -> (FailureKind, String, Option<RunUsage>) {
+        match parse_line(line) {
             Some(RunEvent::Failed {
-                kind: FailureKind::InvalidOutput,
-                ..
-            })
-        ));
+                kind,
+                message,
+                usage,
+            }) => (kind, message, usage),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn synthetic_budget_stop_with_is_error_true_is_budget_exceeded() {
+        let line = r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":"","terminal_reason":"max_budget_usd","total_cost_usd":0.5123,"num_turns":4,"duration_ms":61000}"#;
+        let (kind, message, usage) = failed(line);
+        assert_eq!(kind, FailureKind::BudgetExceeded);
+        assert!(message.contains("spend cap"), "{message}");
+        assert_eq!(usage.unwrap().total_cost_usd, Some(0.5123));
+    }
+
+    #[test]
+    fn synthetic_budget_stop_without_structured_output_is_budget_exceeded() {
+        // is_error false, no structured_output: only the subtype says why.
+        let line = r#"{"type":"result","subtype":"error_max_budget_usd","is_error":false,"total_cost_usd":1.01,"num_turns":9}"#;
+        let (kind, _, usage) = failed(line);
+        assert_eq!(kind, FailureKind::BudgetExceeded);
+        assert_eq!(usage.unwrap().total_cost_usd, Some(1.01));
+
+        // A terminal reason that mentions the budget counts too.
+        let line = r#"{"type":"result","subtype":"success","is_error":false,"terminal_reason":"budget_exceeded"}"#;
+        assert_eq!(failed(line).0, FailureKind::BudgetExceeded);
+    }
+
+    #[test]
+    fn synthetic_max_turns_stop_says_the_turn_limit_was_reached() {
+        let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"","num_turns":30,"total_cost_usd":0.2}"#;
+        let (kind, message, _) = failed(line);
+        assert_eq!(kind, FailureKind::AgentError);
+        assert_eq!(
+            message,
+            "Claude Code stopped after reaching its turn limit (30 turns) without finishing."
+        );
+    }
+
+    #[test]
+    fn synthetic_other_error_names_its_subtype_and_reason() {
+        let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"","terminal_reason":"api_error"}"#;
+        let (kind, message, _) = failed(line);
+        assert_eq!(kind, FailureKind::AgentError);
+        assert_eq!(
+            message,
+            "Claude Code reported an error (subtype error_during_execution, terminal reason api_error)."
+        );
     }
 
     #[test]

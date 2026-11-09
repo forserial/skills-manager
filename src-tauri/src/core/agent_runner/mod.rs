@@ -121,6 +121,8 @@ pub enum FailureKind {
     NonZeroExit,
     /// The agent's output had no usable result.
     InvalidOutput,
+    /// The agent stopped because it reached the spend cap (`budget_usd`).
+    BudgetExceeded,
     Timeout,
     Cancelled,
 }
@@ -154,6 +156,10 @@ pub enum RunEvent {
     Failed {
         kind: FailureKind,
         message: String,
+        /// What the agent reported spending before it stopped, when it got
+        /// as far as reporting anything.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<RunUsage>,
     },
 }
 
@@ -192,13 +198,32 @@ pub trait AgentAdapter: Send + Sync {
 struct Failure {
     kind: FailureKind,
     message: String,
+    usage: Option<RunUsage>,
 }
 
 fn failure(kind: FailureKind, message: impl Into<String>) -> Failure {
     Failure {
         kind,
         message: message.into(),
+        usage: None,
     }
+}
+
+/// The message for a run stopped by its spend cap. The adapter cannot see the
+/// request, so the runner fills in the cap.
+fn budget_message(name: &str, cap: Option<f64>, usage: Option<&RunUsage>) -> String {
+    let cap = match cap {
+        Some(cap) => format!(" (${cap:.2}, set in Settings → Evaluation)"),
+        None => String::new(),
+    };
+    let spent = match usage.and_then(|u| u.total_cost_usd) {
+        Some(spent) => format!(" It had spent ${spent:.2}."),
+        None => String::new(),
+    };
+    format!(
+        "{name} stopped after reaching the spend cap{cap}.{spent} \
+         Raise the cap or choose a cheaper model."
+    )
 }
 
 /// Run `adapter` on `request`, blocking until it finishes, fails, times out or
@@ -223,11 +248,16 @@ pub fn run(
             });
             Ok(output)
         }
-        Err(Failure { kind, message }) => {
+        Err(Failure {
+            kind,
+            message,
+            usage,
+        }) => {
             log::warn!("{} run failed ({kind:?})", adapter.display_name());
             on_event(RunEvent::Failed {
                 kind,
                 message: message.clone(),
+                usage,
             });
             Err(AppError {
                 kind: kind.error_kind(),
@@ -278,8 +308,23 @@ fn run_inner(
         request.timeout,
         |line| match adapter.parse_line(line) {
             Some(event @ (RunEvent::Finished { .. } | RunEvent::Failed { .. })) => {
-                if !matches!(verdict, Some(RunEvent::Failed { .. })) {
-                    verdict = Some(event);
+                match (&mut verdict, event) {
+                    // Keep the first failure, but take the spend the final
+                    // result reports if the failure had none.
+                    (
+                        Some(RunEvent::Failed {
+                            usage: kept @ None, ..
+                        }),
+                        later,
+                    ) => {
+                        *kept = match later {
+                            RunEvent::Failed { usage, .. } => usage,
+                            RunEvent::Finished { usage, .. } => Some(usage),
+                            _ => None,
+                        };
+                    }
+                    (Some(RunEvent::Failed { .. }), _) => {}
+                    (_, event) => verdict = Some(event),
                 }
             }
             Some(event) => on_event(event),
@@ -315,18 +360,33 @@ fn run_inner(
     };
 
     match verdict {
-        Some(RunEvent::Failed { kind, message }) => Err(failure(kind, message)),
+        Some(RunEvent::Failed {
+            kind,
+            message,
+            usage,
+        }) => Err(Failure {
+            message: if kind == FailureKind::BudgetExceeded {
+                budget_message(name, request.budget_usd, usage.as_ref())
+            } else {
+                message
+            },
+            kind,
+            usage,
+        }),
         Some(RunEvent::Finished { output_json, usage }) if exit.success => {
             Ok(RunOutput { output_json, usage })
         }
-        Some(RunEvent::Finished { .. }) => Err(failure(
-            FailureKind::NonZeroExit,
-            format!(
-                "{name} reported a result but exited with {}.{}",
-                exit_code(&exit),
-                stderr_suffix(&exit)
-            ),
-        )),
+        Some(RunEvent::Finished { usage, .. }) => Err(Failure {
+            usage: Some(usage),
+            ..failure(
+                FailureKind::NonZeroExit,
+                format!(
+                    "{name} reported a result but exited with {}.{}",
+                    exit_code(&exit),
+                    stderr_suffix(&exit)
+                ),
+            )
+        }),
         _ if !exit.success => Err(failure(
             FailureKind::LaunchFailed,
             format!(
@@ -569,6 +629,59 @@ mod tests {
         ));
     }
 
+    /// SYNTHETIC: no budget-exceeded run was captured by the spike; this is a
+    /// hand-written result line with the documented `error_max_budget_usd`
+    /// subtype. The runner names the cap from the request and the spend.
+    #[test]
+    fn synthetic_budget_stop_names_the_cap_and_the_spend() {
+        let tmp = tempfile::tempdir().unwrap();
+        let line = r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":"","total_cost_usd":0.5123,"num_turns":4}"#;
+        let script = emit_file_script(tmp.path(), &format!("{line}\n"), false, 1);
+        let mut req = request(tmp.path(), Duration::from_secs(60));
+        req.budget_usd = Some(0.5);
+        let mut events = Vec::new();
+        let err = run(
+            &ScriptAdapter { script },
+            &req,
+            &RunContext {
+                binary_override: Some(shell_path()),
+                proxy_url: None,
+            },
+            &Arc::new(AtomicBool::new(false)),
+            &mut |e| events.push(e),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::Agent);
+        assert_eq!(
+            err.message,
+            "Test agent stopped after reaching the spend cap ($0.50, set in Settings → Evaluation). \
+             It had spent $0.51. Raise the cap or choose a cheaper model."
+        );
+        let Some(RunEvent::Failed { kind, usage, .. }) = events.last() else {
+            panic!("expected Failed, got {:?}", events.last());
+        };
+        assert_eq!(*kind, FailureKind::BudgetExceeded);
+        assert_eq!(usage.as_ref().unwrap().total_cost_usd, Some(0.5123));
+    }
+
+    #[test]
+    fn auth_failure_keeps_the_spend_reported_by_the_later_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = emit_file_script(
+            tmp.path(),
+            include_str!("testdata/claude_failure.jsonl"),
+            false,
+            1,
+        );
+        let (_, events) = run_script(script, tmp.path(), Duration::from_secs(60));
+        let Some(RunEvent::Failed { kind, usage, .. }) = events.last() else {
+            panic!("expected Failed, got {:?}", events.last());
+        };
+        assert_eq!(*kind, FailureKind::Auth);
+        assert_eq!(usage.as_ref().unwrap().total_cost_usd, Some(0.0));
+    }
+
     #[test]
     fn is_error_result_fails_even_with_exit_zero() {
         let tmp = tempfile::tempdir().unwrap();
@@ -762,7 +875,8 @@ mod tests {
             events,
             vec![RunEvent::Failed {
                 kind: FailureKind::BinaryMissing,
-                message: err.message.clone()
+                message: err.message.clone(),
+                usage: None,
             }]
         );
         assert!(started.elapsed() < Duration::from_secs(5));
