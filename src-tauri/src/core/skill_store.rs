@@ -11,7 +11,9 @@ use super::crypto;
 const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
 
 pub struct SkillStore {
-    conn: Mutex<Connection>,
+    /// Visible to `core` so fork-owned tables (`fork_schema`) can keep their
+    /// store methods in their own file.
+    pub(super) conn: Mutex<Connection>,
     secret_key: [u8; 32],
 }
 
@@ -119,6 +121,7 @@ impl SkillStore {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
         super::migrations::run_migrations(&conn)?;
+        super::fork_schema::ensure_fork_schema(&conn)?;
 
         // Derive key file path from the database directory.
         let key_path = db_path

@@ -270,6 +270,8 @@ Useful organization queries:
 "$SM" --json skills list --deployed-to codex
 ```
 
+Evaluate: `skills evaluate <skill> [--evaluator skill-judge] [--agent claude_code] [--model <m>]` runs a paid agent review (about $1, a few minutes; ask first), and `skills evaluations <skill>` lists stored runs newest first with `stale: true` once the skill changed.
+
 ## Presets
 
 ```bash
