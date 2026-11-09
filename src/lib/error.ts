@@ -9,6 +9,9 @@ export const ERROR_KINDS = [
   "cancelled",
   "internal",
   "target_conflict",
+  /** An agent CLI run failed: binary missing, non-zero exit, timeout, or
+   *  invalid output. */
+  "agent",
 ] as const;
 
 export type ErrorKind = (typeof ERROR_KINDS)[number];

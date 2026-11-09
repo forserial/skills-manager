@@ -47,6 +47,9 @@ pub enum ErrorKind {
     /// A write was refused because the target is not ours to replace. Always
     /// carries `ErrorDetails::TargetConflict`.
     TargetConflict,
+    /// An agent CLI run failed: the binary is missing, it exited non-zero,
+    /// it timed out, or its output was not a usable result.
+    Agent,
 }
 
 impl fmt::Display for AppError {
@@ -161,6 +164,16 @@ impl AppError {
         }
     }
 
+    /// An agent CLI run failed (missing binary, non-zero exit, timeout, or
+    /// invalid output). The message says which, in words the user can act on.
+    pub fn agent(msg: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::Agent,
+            message: msg.into(),
+            details: None,
+        }
+    }
+
     pub fn internal(e: impl fmt::Display) -> Self {
         Self {
             kind: ErrorKind::Internal,
@@ -260,6 +273,14 @@ mod tests {
         assert!(matches!(AppError::network("x").kind, ErrorKind::Network));
         assert!(matches!(AppError::io("x").kind, ErrorKind::Io));
         assert!(matches!(AppError::internal("x").kind, ErrorKind::Internal));
+        assert!(matches!(AppError::agent("x").kind, ErrorKind::Agent));
+    }
+
+    #[test]
+    fn agent_kind_serializes_as_agent() {
+        let json = serde_json::to_value(AppError::agent("claude not found")).unwrap();
+        assert_eq!(json["kind"], "agent");
+        assert_eq!(json["message"], "claude not found");
     }
 
     #[test]
