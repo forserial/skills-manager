@@ -68,7 +68,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const appUpdateCheckedRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
   const lastActivePresetIdRef = useRef<string | null>(null);
-  const evaluation = useEvaluationRuns();
+  const evaluation = useEvaluationRuns(managedSkills);
 
   const setTranslatedError = useCallback((key: string) => {
     setAppError(i18n.t("common.loadFailed", { item: i18n.t(key) }));

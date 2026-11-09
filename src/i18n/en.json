@@ -1192,6 +1192,14 @@
     "installing": "Installing…",
     "installed": "skill-judge installed",
     "installFailed": "Could not install skill-judge",
+    "menuEvaluate": "Evaluate",
+    "menuEvaluating": "Evaluating…",
+    "badge": {
+      "grade": "Grade: {{grade}}",
+      "score": "Score: {{score}}",
+      "evaluatedAt": "Evaluated {{date}}",
+      "stale": "Outdated: the skill changed since this evaluation"
+    },
     "toast": {
       "finished": "Evaluation finished",
       "failed": "Evaluation failed",

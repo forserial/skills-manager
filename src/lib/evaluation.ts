@@ -7,6 +7,7 @@ import {
   type EvaluationFinding,
   type EvaluationPhase,
   type EvaluationProgress,
+  type EvaluationSummary,
 } from "./evaluationApi";
 
 // ── Run state ──
@@ -213,6 +214,66 @@ export function formatDuration(ms: number | null | undefined): string {
 export function formatCost(usd: number | null | undefined): string {
   if (usd == null || !Number.isFinite(usd)) return "—";
   return `$${usd.toFixed(2)}`;
+}
+
+// ── Grade badge (skill cards) ──
+
+export type GradeTone = "excellent" | "good" | "fair" | "poor" | "neutral";
+
+/** A letter grade, optionally with + or -, and S for "above A". */
+const LETTER_GRADE = /^([SA-F])[+-]?$/i;
+
+/** The colour band of a letter grade. Anything that is not a letter grade
+ *  (a word, a number) is neutral rather than guessed at. */
+export function gradeTone(grade: string | null | undefined): GradeTone {
+  const letter = grade?.trim().match(LETTER_GRADE)?.[1]?.toUpperCase();
+  switch (letter) {
+    case "S":
+    case "A":
+      return "excellent";
+    case "B":
+      return "good";
+    case "C":
+      return "fair";
+    case "D":
+    case "E":
+    case "F":
+      return "poor";
+    default:
+      return "neutral";
+  }
+}
+
+export interface GradeBadgeProps {
+  /** The grade, or the score when there is no grade. */
+  label: string;
+  tone: GradeTone;
+  /** The skill changed since the evaluation. */
+  dimmed: boolean;
+  /** The formatted score, for the tooltip; null when there is none. */
+  score: string | null;
+  /** The grade, for the tooltip; null when there is none. */
+  grade: string | null;
+  /** Unix ms. */
+  finishedAt: number;
+}
+
+/** What the card badge shows for a skill's latest successful evaluation;
+ *  null when there is no evaluation, or it has neither grade nor score. */
+export function gradeBadgeProps(summary: EvaluationSummary | null | undefined): GradeBadgeProps | null {
+  if (!summary) return null;
+  const grade = summary.grade?.trim() || null;
+  const score = formatScore(summary.score_value, summary.score_max);
+  const label = grade ?? score;
+  if (!label) return null;
+  return {
+    label,
+    tone: grade ? gradeTone(grade) : "neutral",
+    dimmed: summary.stale,
+    score,
+    grade,
+    finishedAt: summary.finished_at,
+  };
 }
 
 // ── Settings ──

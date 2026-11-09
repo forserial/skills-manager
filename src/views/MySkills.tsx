@@ -46,6 +46,8 @@ import { BatchSyncAgentDialog } from "../components/BatchSyncAgentDialog";
 import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
+import { EvaluationGradeBadge } from "../components/EvaluationGradeBadge";
+import { useEvaluateCardAction } from "../hooks/useEvaluateCardAction";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -166,7 +168,9 @@ export function MySkills() {
     closeSkillDetail,
     projects,
     refreshProjects,
+    evaluationSummaries,
   } = useApp();
+  const evaluateAction = useEvaluateCardAction();
   const [viewMode, setViewMode, groupBySource, setGroupBySource] = useSkillViewMode();
   // Grouping is a view preference, so it persists; which groups are open is
   // session state, because a group the user expanded once is not a statement
@@ -1683,6 +1687,7 @@ export function MySkills() {
                                   onSelect: () => handleRefreshSkill(skill),
                                 }]
                               : []),
+                            evaluateAction(skill.id),
                             {
                               key: "delete",
                               label: t("common.delete"),
@@ -1706,8 +1711,9 @@ export function MySkills() {
                     <p className="text-[13px] leading-[18px] text-muted truncate">
                       {skill.description || "—"}
                     </p>
-                    {((badge && !showUpdatePill) || conflictIds.has(skill.id)) && (
+                    {((badge && !showUpdatePill) || conflictIds.has(skill.id) || evaluationSummaries[skill.id]) && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <EvaluationGradeBadge summary={evaluationSummaries[skill.id]} />
                         {conflictIds.has(skill.id) && (
                           <button
                             onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
@@ -1953,6 +1959,7 @@ export function MySkills() {
                       {badge.label}
                     </span>
                   )}
+                  <EvaluationGradeBadge summary={evaluationSummaries[skill.id]} />
                   <SyncDots
                     skill={skill}
                     tools={tools}
@@ -2023,6 +2030,7 @@ export function MySkills() {
                               onSelect: () => handleRefreshSkill(skill),
                             }]
                           : []),
+                        evaluateAction(skill.id),
                         {
                           key: "delete",
                           label: t("common.delete"),

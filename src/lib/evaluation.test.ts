@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ManagedSkill } from "./tauri";
-import type { EvaluationProgress } from "./evaluationApi";
+import type { EvaluationProgress, EvaluationSummary } from "./evaluationApi";
 import {
   MAX_PROGRESS_LINES,
   checkPositiveNumberSetting,
@@ -9,6 +9,8 @@ import {
   formatCost,
   formatDuration,
   formatScore,
+  gradeBadgeProps,
+  gradeTone,
   groupFindingsBySeverity,
   hasSkillJudge,
   isRunActive,
@@ -237,5 +239,66 @@ describe("checkPositiveNumberSetting", () => {
     expect(checkPositiveNumberSetting("ten", true).ok).toBe(false);
     expect(checkPositiveNumberSetting("-1", false).ok).toBe(false);
     expect(checkPositiveNumberSetting("0.0", false).ok).toBe(false);
+  });
+});
+
+describe("gradeTone", () => {
+  it.each([
+    ["A", "excellent"],
+    ["a+", "excellent"],
+    ["S", "excellent"],
+    ["B-", "good"],
+    [" C ", "fair"],
+    ["D", "poor"],
+    ["F", "poor"],
+  ] as const)("puts %s in the %s band", (grade, tone) => {
+    expect(gradeTone(grade)).toBe(tone);
+  });
+
+  it.each(["Excellent", "77", "", "A++", null, undefined])("leaves %s neutral", (grade) => {
+    expect(gradeTone(grade)).toBe("neutral");
+  });
+});
+
+describe("gradeBadgeProps", () => {
+  const summary = (over: Partial<EvaluationSummary>): EvaluationSummary => ({
+    skill_id: "skill-a",
+    evaluation_id: "e1",
+    grade: "B",
+    score_value: 77,
+    score_max: 120,
+    stale: false,
+    finished_at: 1_700_000_000_000,
+    ...over,
+  });
+
+  it("is null without a summary", () => {
+    expect(gradeBadgeProps(undefined)).toBeNull();
+    expect(gradeBadgeProps(null)).toBeNull();
+  });
+
+  it("shows the grade, with the score for the tooltip", () => {
+    expect(gradeBadgeProps(summary({}))).toEqual({
+      label: "B",
+      tone: "good",
+      dimmed: false,
+      score: "77/120",
+      grade: "B",
+      finishedAt: 1_700_000_000_000,
+    });
+  });
+
+  it("falls back to the score, in the neutral band, when there is no grade", () => {
+    const badge = gradeBadgeProps(summary({ grade: null }));
+    expect(badge).toMatchObject({ label: "77/120", tone: "neutral", grade: null });
+    expect(gradeBadgeProps(summary({ grade: "  " }))?.label).toBe("77/120");
+  });
+
+  it("is dimmed when the evaluation is stale", () => {
+    expect(gradeBadgeProps(summary({ stale: true }))?.dimmed).toBe(true);
+  });
+
+  it("is null with neither grade nor score", () => {
+    expect(gradeBadgeProps(summary({ grade: null, score_value: null, score_max: null }))).toBeNull();
   });
 });
