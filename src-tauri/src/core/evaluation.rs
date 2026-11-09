@@ -26,6 +26,7 @@ use crate::core::agent_runner::{
 use crate::core::audit_log::AuditDraft;
 use crate::core::central_repo;
 use crate::core::error::{AppError, ErrorKind};
+use crate::core::fork_schema::live_content_hash;
 use crate::core::skill_store::{SkillRecord, SkillStore};
 
 // ── Settings ──
@@ -349,7 +350,9 @@ impl EvaluationStatus {
 pub struct EvaluationRecord {
     pub id: String,
     pub skill_id: String,
-    /// `skills.content_hash` when the run started.
+    /// The skill directory's content hash when the run started
+    /// (`fork_schema::live_content_hash`, the function the reindex fills
+    /// `skills.content_hash` with).
     pub skill_content_hash: Option<String>,
     /// The evaluator skill's name.
     pub evaluator: String,
@@ -369,8 +372,8 @@ pub struct EvaluationRecord {
     pub result: Option<EvaluationResult>,
     pub report_md: Option<String>,
     pub error: Option<String>,
-    /// Computed at read time: the skill's current content hash differs from
-    /// `skill_content_hash`.
+    /// Computed at read time: the skill directory's content hash, read from
+    /// disk now, differs from `skill_content_hash`.
     pub stale: bool,
 }
 
@@ -622,6 +625,10 @@ fn run_and_record(
         budget_usd: opts.budget_usd,
     };
 
+    // What the agent is about to read, hashed the way `stale` is computed at
+    // read time. `skill.content_hash` may predate an edit made on disk since
+    // the last reindex, and recording it would mark this run stale at once.
+    let skill_content_hash = live_content_hash(&skill.central_path, skill.content_hash.clone());
     let started_at = now_ms();
     let clock = Instant::now();
     // The runner's error drops the failure kind and the spend; its final
@@ -673,7 +680,7 @@ fn run_and_record(
     let mut record = EvaluationRecord {
         id: uuid::Uuid::now_v7().to_string(),
         skill_id: skill.id.clone(),
-        skill_content_hash: skill.content_hash.clone(),
+        skill_content_hash,
         evaluator: evaluator.name.clone(),
         evaluator_content_hash: evaluator.content_hash.clone(),
         agent: adapter.key().to_string(),
@@ -691,12 +698,11 @@ fn run_and_record(
     store.insert_evaluation(&record).map_err(AppError::db)?;
     drop(work);
 
-    // The library may have been reindexed while the agent ran.
+    // The skill may have been edited, or deleted, while the agent ran.
     record.stale = store
-        .get_skill_by_id(&skill.id)
+        .get_evaluation(&record.id)
         .map_err(AppError::db)?
-        .map(|current| current.content_hash != record.skill_content_hash)
-        .unwrap_or(true);
+        .map_or(true, |stored| stored.stale);
 
     if record.status == EvaluationStatus::Succeeded {
         return Ok(record);
@@ -1033,7 +1039,13 @@ mod tests {
         let record = run_fake(&f, &agent).unwrap();
 
         assert_eq!(record.status, EvaluationStatus::Succeeded);
-        assert_eq!(record.skill_content_hash.as_deref(), Some("hash-target"));
+        // The fixture's DB hash ("hash-target") is not the directory's, as after
+        // an on-disk edit the reindex has not seen yet. The run records what
+        // the agent read, so it is not stale the moment it is stored.
+        assert_eq!(
+            record.skill_content_hash,
+            Some(crate::core::content_hash::hash_directory(&target_dir).unwrap())
+        );
         assert_eq!(record.evaluator, "skill-judge");
         assert_eq!(record.evaluator_content_hash.as_deref(), Some("hash-judge"));
         assert_eq!(record.agent, "fake_agent");
