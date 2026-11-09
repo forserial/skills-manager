@@ -12,6 +12,7 @@
 //! them for callers that have a store.
 
 pub mod claude_code;
+pub mod registry;
 pub mod resolve;
 
 use std::fmt;

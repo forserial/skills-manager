@@ -5,7 +5,8 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
 use app_lib::core::{
-    app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
+    agent_runner, app_state, audit_log::AuditDraft, central_repo, error::AppError, evaluation,
+    git_backup, git_fetcher,
     installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
     well_known,
@@ -239,6 +240,26 @@ enum SkillsCommand {
         dry_run: bool,
     },
     Tag(TagArgs),
+    /// Evaluate a library skill with an evaluator skill run by an agent CLI.
+    /// Progress goes to stderr; the stored evaluation is printed on success.
+    Evaluate {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// Agent key (default: the eval_agent setting, else claude_code)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Evaluator skill name (default: the eval_evaluator setting, else skill-judge)
+        #[arg(long)]
+        evaluator: Option<String>,
+        /// Model passed to the agent (default: the eval_model setting, else the agent's own)
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// List a skill's stored evaluations, newest first, each with a stale flag.
+    Evaluations {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -1003,8 +1024,50 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             print_json(&report, json);
         }
         SkillsCommand::Tag(args) => run_tag(args, store, json)?,
+        SkillsCommand::Evaluate {
+            reference,
+            agent,
+            evaluator,
+            model,
+        } => {
+            let skill = resolve_skill(store, &reference)?;
+            let opts = evaluation::EvaluateOptions {
+                agent,
+                evaluator,
+                model,
+                ..Default::default()
+            };
+            let record = evaluation::evaluate_skill(
+                store,
+                &skill.id,
+                &opts,
+                &Arc::new(AtomicBool::new(false)),
+                &mut print_run_event,
+            )
+            .map_err(map_app_err)?;
+            print_json(&record, json);
+        }
+        SkillsCommand::Evaluations { reference } => {
+            let skill = resolve_skill(store, &reference)?;
+            print_json(&store.list_evaluations(&skill.id)?, json);
+        }
     }
     Ok(())
+}
+
+/// Evaluation progress, on stderr so `--json` stdout stays one JSON value.
+/// The outcome itself is reported by the caller, not here.
+fn print_run_event(event: agent_runner::RunEvent) {
+    use agent_runner::RunEvent;
+    match event {
+        RunEvent::Started { command } => eprintln!("evaluate: starting {command}"),
+        RunEvent::Progress { text } => eprintln!("evaluate: {text}"),
+        RunEvent::Finished { usage, .. } => match usage.total_cost_usd {
+            Some(cost) => eprintln!("evaluate: agent finished (cost ${cost:.2})"),
+            None => eprintln!("evaluate: agent finished"),
+        },
+        RunEvent::Failed { .. } => {}
+    }
 }
 
 fn list_skills(store: &SkillStore) -> anyhow::Result<Vec<SkillSummary>> {
@@ -3452,6 +3515,47 @@ mod tests {
                     ..
                 }
             }) if reference == "Web Dev" && agents == vec!["codex"]
+        ));
+    }
+
+    #[test]
+    fn parses_the_evaluation_commands() {
+        let cli = Cli::try_parse_from([
+            "skills-manager-cli",
+            "--json",
+            "skills",
+            "evaluate",
+            "browser",
+            "--agent",
+            "claude_code",
+            "--evaluator",
+            "skill-judge",
+            "--model",
+            "sonnet",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Skills(SkillsArgs {
+                command: SkillsCommand::Evaluate {
+                    reference,
+                    agent: Some(agent),
+                    evaluator: Some(evaluator),
+                    model: Some(model),
+                }
+            }) if reference == "browser"
+                && agent == "claude_code"
+                && evaluator == "skill-judge"
+                && model == "sonnet"
+        ));
+
+        let cli =
+            Cli::try_parse_from(["skills-manager-cli", "skills", "evaluations", "browser"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Skills(SkillsArgs {
+                command: SkillsCommand::Evaluations { reference }
+            }) if reference == "browser"
         ));
     }
 
