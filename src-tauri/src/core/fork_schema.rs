@@ -5,9 +5,13 @@
 //! on existing databases, so fork tables are created idempotently here, right
 //! after the migrations run, and `user_version` is left alone.
 
+use std::collections::HashMap;
+use std::path::Path;
+
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 
+use super::content_hash;
 use super::evaluation::{EvaluationRecord, EvaluationResult, EvaluationStatus, EvaluationSummary};
 use super::skill_store::SkillStore;
 
@@ -44,10 +48,80 @@ pub fn ensure_fork_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The skill's content hash as its directory reads now.
+///
+/// `stale` compares against this rather than `skills.content_hash`, which only
+/// in-app updates and the startup reindex refresh: an edit made on disk while
+/// the app runs must mark the evaluation stale without a restart. It is the
+/// same `hash_directory` the reindex stores in `skills.content_hash`, so an
+/// unedited skill agrees with its DB hash. Falls back to `db_hash` when the
+/// directory is missing, because `hash_directory` reads a missing directory as
+/// an empty one. Never written back: the skills table stays upstream's.
+pub(crate) fn live_content_hash(central_path: &str, db_hash: Option<String>) -> Option<String> {
+    let dir = Path::new(central_path);
+    if !dir.is_dir() {
+        return db_hash;
+    }
+    match content_hash::hash_directory(dir) {
+        Ok(hash) => Some(hash),
+        Err(e) => {
+            log::warn!("could not hash {}: {e}", dir.display());
+            db_hash
+        }
+    }
+}
+
+/// Where a skill lives and the hash the DB holds for it, read under the lock
+/// so the directory can be hashed after it is released.
+struct SkillLocation {
+    central_path: String,
+    db_hash: Option<String>,
+}
+
+/// [`live_content_hash`] once per skill. Runs without the DB mutex held.
+fn live_hashes(skills: HashMap<String, SkillLocation>) -> HashMap<String, Option<String>> {
+    skills
+        .into_iter()
+        .map(|(id, loc)| (id, live_content_hash(&loc.central_path, loc.db_hash)))
+        .collect()
+}
+
+fn is_stale(recorded: &Option<String>, current: Option<&Option<String>>) -> bool {
+    // `None` would mean the skill row vanished between query and hash; the
+    // JOIN found it, so this is unreachable in practice.
+    current.map_or(true, |current| recorded != current)
+}
+
 const RECORD_COLUMNS: &str = "e.id, e.skill_id, e.skill_content_hash, e.evaluator,
     e.evaluator_content_hash, e.agent, e.model, e.status, e.started_at, e.finished_at,
     e.duration_ms, e.cost_usd, e.result_json, e.report_md, e.error,
-    (e.skill_content_hash IS NOT s.content_hash) AS stale";
+    s.central_path, s.content_hash";
+
+/// A record with `stale` still unset, plus its skill's location.
+fn map_located(row: &rusqlite::Row<'_>) -> rusqlite::Result<(EvaluationRecord, SkillLocation)> {
+    Ok((
+        map_record(row)?,
+        SkillLocation {
+            central_path: row.get(15)?,
+            db_hash: row.get(16)?,
+        },
+    ))
+}
+
+/// Hash each skill in `rows` once, then set every record's `stale`.
+fn with_stale(rows: Vec<(EvaluationRecord, SkillLocation)>) -> Vec<EvaluationRecord> {
+    let mut skills = HashMap::new();
+    let mut records = Vec::with_capacity(rows.len());
+    for (record, location) in rows {
+        skills.entry(record.skill_id.clone()).or_insert(location);
+        records.push(record);
+    }
+    let current = live_hashes(skills);
+    for record in &mut records {
+        record.stale = is_stale(&record.skill_content_hash, current.get(&record.skill_id));
+    }
+    records
+}
 
 fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvaluationRecord> {
     let id: String = row.get(0)?;
@@ -72,7 +146,7 @@ fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvaluationRecord> {
         result,
         report_md: row.get(13)?,
         error: row.get(14)?,
-        stale: row.get(15)?,
+        stale: false,
         id,
     })
 }
@@ -118,61 +192,93 @@ impl SkillStore {
 
     /// Every stored run for `skill_id`, newest first, each with its stale flag.
     pub fn list_evaluations(&self, skill_id: &str) -> Result<Vec<EvaluationRecord>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {RECORD_COLUMNS}
-             FROM skill_evaluations e JOIN skills s ON s.id = e.skill_id
-             WHERE e.skill_id = ?1
-             ORDER BY e.started_at DESC, e.id DESC"
-        ))?;
-        let rows = stmt.query_map(params![skill_id], map_record)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {RECORD_COLUMNS}
+                 FROM skill_evaluations e JOIN skills s ON s.id = e.skill_id
+                 WHERE e.skill_id = ?1
+                 ORDER BY e.started_at DESC, e.id DESC"
+            ))?;
+            let rows = stmt.query_map(params![skill_id], map_located)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Ok(with_stale(rows))
     }
 
     /// One stored run by id.
     pub fn get_evaluation(&self, id: &str) -> Result<Option<EvaluationRecord>> {
-        let conn = self.conn.lock().unwrap();
-        Ok(conn
-            .query_row(
+        let row = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
                 &format!(
                     "SELECT {RECORD_COLUMNS}
                      FROM skill_evaluations e JOIN skills s ON s.id = e.skill_id
                      WHERE e.id = ?1"
                 ),
                 params![id],
-                map_record,
+                map_located,
             )
-            .optional()?)
+            .optional()?
+        };
+        Ok(row.and_then(|row| with_stale(vec![row]).pop()))
     }
 
     /// Per skill, the latest successful run: grade, score, stale flag.
     /// Skills never evaluated successfully are absent.
+    ///
+    /// Runs on every skill-list reload. The stale flag hashes each listed
+    /// skill's directory, so the cost is O(evaluated skills), not O(library):
+    /// skills without a successful evaluation are never read from disk.
     pub fn latest_evaluation_summaries(&self) -> Result<Vec<EvaluationSummary>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT e.skill_id, e.id, e.grade, e.score_value, e.score_max,
-                    (e.skill_content_hash IS NOT s.content_hash) AS stale, e.finished_at
-             FROM skill_evaluations e JOIN skills s ON s.id = e.skill_id
-             WHERE e.id = (
-                 SELECT latest.id FROM skill_evaluations latest
-                 WHERE latest.skill_id = e.skill_id AND latest.status = 'succeeded'
-                 ORDER BY latest.started_at DESC, latest.id DESC
-                 LIMIT 1
-             )
-             ORDER BY e.skill_id",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(EvaluationSummary {
-                skill_id: row.get(0)?,
-                evaluation_id: row.get(1)?,
-                grade: row.get(2)?,
-                score_value: row.get(3)?,
-                score_max: row.get(4)?,
-                stale: row.get(5)?,
-                finished_at: row.get(6)?,
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT e.skill_id, e.id, e.grade, e.score_value, e.score_max,
+                        e.skill_content_hash, e.finished_at, s.central_path, s.content_hash
+                 FROM skill_evaluations e JOIN skills s ON s.id = e.skill_id
+                 WHERE e.id = (
+                     SELECT latest.id FROM skill_evaluations latest
+                     WHERE latest.skill_id = e.skill_id AND latest.status = 'succeeded'
+                     ORDER BY latest.started_at DESC, latest.id DESC
+                     LIMIT 1
+                 )
+                 ORDER BY e.skill_id",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let recorded: Option<String> = row.get(5)?;
+                let summary = EvaluationSummary {
+                    skill_id: row.get(0)?,
+                    evaluation_id: row.get(1)?,
+                    grade: row.get(2)?,
+                    score_value: row.get(3)?,
+                    score_max: row.get(4)?,
+                    stale: false,
+                    finished_at: row.get(6)?,
+                };
+                let location = SkillLocation {
+                    central_path: row.get(7)?,
+                    db_hash: row.get(8)?,
+                };
+                Ok((summary, recorded, location))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let mut skills = HashMap::new();
+        let mut summaries = Vec::with_capacity(rows.len());
+        for (summary, recorded, location) in rows {
+            skills.insert(summary.skill_id.clone(), location);
+            summaries.push((summary, recorded));
+        }
+        let current = live_hashes(skills);
+        Ok(summaries
+            .into_iter()
+            .map(|(mut summary, recorded)| {
+                summary.stale = is_stale(&recorded, current.get(&summary.skill_id));
+                summary
             })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            .collect())
     }
 }
 
@@ -300,6 +406,100 @@ mod tests {
         assert!(rows[0].stale);
         assert!(store.latest_evaluation_summaries().unwrap()[0].stale);
         assert!(store.get_evaluation("e1").unwrap().unwrap().stale);
+    }
+
+    /// A skill whose directory exists, with the DB hash the reindex would
+    /// write for it.
+    fn skill_on_disk(root: &Path, id: &str) -> SkillRecord {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), format!("---\nname: {id}\n---\n")).unwrap();
+        let hash = content_hash::hash_directory(&dir).unwrap();
+        SkillRecord {
+            central_path: dir.to_string_lossy().to_string(),
+            ..skill(id, &hash)
+        }
+    }
+
+    fn files_read() -> usize {
+        content_hash::FILES_READ.with(|count| count.get())
+    }
+
+    #[test]
+    fn an_on_disk_edit_turns_evaluations_stale_without_a_db_hash_update() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let record = skill_on_disk(tmp.path(), "a");
+        let db_hash = record.content_hash.clone().unwrap();
+        store.insert_skill(&record).unwrap();
+        store
+            .insert_evaluation(&evaluation("e1", "a", &db_hash, 1, EvaluationStatus::Succeeded, "A"))
+            .unwrap();
+
+        // Unedited: the live hash agrees with the one stored with the run.
+        assert!(!store.list_evaluations("a").unwrap()[0].stale);
+        assert!(!store.latest_evaluation_summaries().unwrap()[0].stale);
+        assert!(!store.get_evaluation("e1").unwrap().unwrap().stale);
+
+        std::fs::write(Path::new(&record.central_path).join("SKILL.md"), "edited").unwrap();
+
+        assert!(store.list_evaluations("a").unwrap()[0].stale);
+        assert!(store.latest_evaluation_summaries().unwrap()[0].stale);
+        assert!(store.get_evaluation("e1").unwrap().unwrap().stale);
+        // Read-only: the DB hash is still the one from before the edit.
+        let row = store.get_skill_by_id("a").unwrap().unwrap();
+        assert_eq!(row.content_hash.as_deref(), Some(db_hash.as_str()));
+    }
+
+    #[test]
+    fn a_missing_skill_directory_falls_back_to_the_db_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        for (id, db_hash) in [("same", "h1"), ("changed", "h2")] {
+            store
+                .insert_skill(&SkillRecord {
+                    central_path: tmp.path().join(id).to_string_lossy().to_string(),
+                    ..skill(id, db_hash)
+                })
+                .unwrap();
+        }
+        store
+            .insert_evaluation(&evaluation("e1", "same", "h1", 1, EvaluationStatus::Succeeded, "A"))
+            .unwrap();
+        store
+            .insert_evaluation(&evaluation("e2", "changed", "h1", 2, EvaluationStatus::Succeeded, "A"))
+            .unwrap();
+
+        // A missing directory would hash as an empty one; the DB hash is used.
+        assert!(!store.list_evaluations("same").unwrap()[0].stale);
+        assert!(store.list_evaluations("changed").unwrap()[0].stale);
+        let summaries = store.latest_evaluation_summaries().unwrap();
+        let stale: Vec<_> = summaries.iter().map(|s| (s.skill_id.as_str(), s.stale)).collect();
+        assert_eq!(stale, [("changed", true), ("same", false)]);
+    }
+
+    #[test]
+    fn each_evaluated_skill_is_hashed_once_per_call_and_others_not_at_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let record = skill_on_disk(tmp.path(), "a");
+        let hash = record.content_hash.clone().unwrap();
+        store.insert_skill(&record).unwrap();
+        store.insert_skill(&skill_on_disk(tmp.path(), "never")).unwrap();
+        for (id, started_at) in [("e1", 1), ("e2", 2), ("e3", 3)] {
+            store
+                .insert_evaluation(&evaluation(id, "a", &hash, started_at, EvaluationStatus::Succeeded, "A"))
+                .unwrap();
+        }
+
+        // Each skill directory here holds one file.
+        let before = files_read();
+        assert_eq!(store.list_evaluations("a").unwrap().len(), 3);
+        assert_eq!(files_read() - before, 1);
+
+        let before = files_read();
+        assert_eq!(store.latest_evaluation_summaries().unwrap().len(), 1);
+        assert_eq!(files_read() - before, 1, "only evaluated skills are hashed");
     }
 
     #[test]
