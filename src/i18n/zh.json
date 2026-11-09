@@ -1192,6 +1192,14 @@
     "installing": "正在安装…",
     "installed": "skill-judge 已安装",
     "installFailed": "无法安装 skill-judge",
+    "menuEvaluate": "评估",
+    "menuEvaluating": "正在评估…",
+    "badge": {
+      "grade": "等级：{{grade}}",
+      "score": "得分：{{score}}",
+      "evaluatedAt": "评估于 {{date}}",
+      "stale": "已过期：此次评估之后技能已有改动"
+    },
     "toast": {
       "finished": "评估已完成",
       "failed": "评估失败",

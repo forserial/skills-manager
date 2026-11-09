@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import i18n from "../i18n";
 import * as api from "../lib/tauri";
+import type { ManagedSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import {
   evaluationRunsReducer,
@@ -34,7 +35,9 @@ const loadSummaries = (): Promise<Record<string, EvaluationSummary>> =>
     .getEvaluationSummaries()
     .then((list) => Object.fromEntries(list.map((s) => [s.skill_id, s])));
 
-export function useEvaluationRuns(): EvaluationContextState {
+/** `skills` is the managed skill list: summaries reload whenever it does,
+ *  since a content change is what turns a summary stale. */
+export function useEvaluationRuns(skills: readonly ManagedSkill[]): EvaluationContextState {
   const [evaluationRuns, dispatch] = useReducer(evaluationRunsReducer, {});
   const [evaluationSummaries, setEvaluationSummaries] = useState<
     Record<string, EvaluationSummary>
@@ -62,7 +65,7 @@ export function useEvaluationRuns(): EvaluationContextState {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [skills]);
 
   // One listener for every run, registered once.
   useEffect(() => {
