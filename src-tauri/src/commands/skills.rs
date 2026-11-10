@@ -839,6 +839,7 @@ pub fn delete_managed_skills_by_ids(
             store.delete_skill(skill_id)?;
             crate::core::fork_files::remove_all_for_unlocked(skill_id)?;
             crate::core::baseline::forget_base_content(skill_id);
+            crate::core::skill_update_merge::cleanup::forget(skill_id);
             store.log_audit(
                 AuditDraft::new("remove")
                     .skill(skill_id.clone(), skill.name.clone())

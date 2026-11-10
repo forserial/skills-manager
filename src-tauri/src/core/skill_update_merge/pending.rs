@@ -103,7 +103,7 @@ impl PendingMerge {
     }
 }
 
-fn root() -> PathBuf {
+pub(super) fn root() -> PathBuf {
     central_repo::base_dir().join("pending-merges")
 }
 

@@ -600,6 +600,7 @@ pub fn rebuild(
     }
     if all {
         sweep_base_store(store);
+        crate::core::skill_update_merge::cleanup::sweep(store);
     }
     let count = |status| skills.iter().filter(|e| e.status == status).count();
     Ok(RebuildReport {
