@@ -289,6 +289,10 @@ enum SkillsCommand {
         #[arg(long, conflicts_with_all = ["local", "upstream"])]
         commits: bool,
     },
+    /// Local changes with their notes (`changes <skill>`), set a changed
+    /// file's note (`changes note`), or export them as a patch
+    /// (`changes export`).
+    Changes(ChangesArgs),
     /// Evaluate a library skill with an evaluator skill run by an agent CLI.
     /// Progress goes to stderr; the stored evaluation is printed on success.
     Evaluate {
@@ -332,6 +336,46 @@ enum BaselineCommand {
         /// With --all, also rebuild skills that already have a baseline
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+struct ChangesArgs {
+    #[command(subcommand)]
+    command: Option<ChangesCommand>,
+    /// Skill ref (id / name / dir basename / central path): list its
+    /// changed files with state and note
+    #[arg(required = true)]
+    reference: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum ChangesCommand {
+    /// Set the one-line reason for a changed file, or clear it. A note is
+    /// dropped by itself once the file no longer differs from the baseline.
+    Note {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// File path relative to the skill directory
+        path: String,
+        /// The reason, one line
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        note: Option<String>,
+        /// Remove the file's note
+        #[arg(long)]
+        clear: bool,
+    },
+    /// A unified diff of the library copy against the baseline, each note a
+    /// comment line above its file. Paths start at the upstream repository
+    /// root: `git apply` it at the root of a checkout of the baseline
+    /// revision. Without --output the patch goes to stdout.
+    Export {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// Write the patch here and print a summary instead
+        #[arg(long, short)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -1146,6 +1190,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             upstream,
             commits,
         } => run_diff(store, &reference, local, upstream, commits, json)?,
+        SkillsCommand::Changes(args) => run_changes(store, args, json)?,
         SkillsCommand::Fork {
             reference,
             new_name,
@@ -1577,6 +1622,128 @@ fn run_diff_local(store: &SkillStore, reference: &str, json: bool) -> anyhow::Re
     let diff = app_lib::core::baseline::local_diff(store, &skill, proxy.as_deref())?;
     print_json(&diff, json);
     Ok(())
+}
+
+// ── change notes and patch export (sm-69q.8) ──
+
+/// `skills changes export` summary; `patch` only when it went to no file.
+#[derive(Serialize)]
+struct ChangesExportReport {
+    #[serde(flatten)]
+    export: app_lib::core::change_notes::PatchExport,
+    output: Option<String>,
+    patch: Option<String>,
+}
+
+fn run_changes(store: &SkillStore, args: ChangesArgs, json: bool) -> anyhow::Result<()> {
+    use app_lib::core::change_notes;
+    match args.command {
+        None => {
+            let reference = args.reference.context("a skill reference is required")?;
+            let skill = resolve_skill(store, &reference)?;
+            print_json(&change_notes::changes_report(store, &skill)?, json);
+        }
+        Some(ChangesCommand::Note {
+            reference,
+            path,
+            note,
+            clear,
+        }) => {
+            let skill = resolve_skill(store, &reference)?;
+            let report = match note.filter(|_| !clear) {
+                Some(note) => change_notes::set_note(store, &skill, &path, &note)?,
+                None => change_notes::clear_note(store, &skill, &path)?,
+            };
+            print_json(&report, json);
+        }
+        Some(ChangesCommand::Export { reference, output }) => {
+            let skill = resolve_skill(store, &reference)?;
+            let proxy = store.proxy_url();
+            let export = change_notes::export_patch(store, &skill, proxy.as_deref())?;
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &export.patch)
+                        .with_context(|| format!("failed to write {}", path.display()))?;
+                    let report = ChangesExportReport {
+                        export,
+                        output: Some(path.display().to_string()),
+                        patch: None,
+                    };
+                    print_json(&report, json);
+                }
+                None if json => {
+                    let patch = Some(export.text());
+                    let report = ChangesExportReport {
+                        export,
+                        output: None,
+                        patch,
+                    };
+                    print_json(&report, json);
+                }
+                None => {
+                    use std::io::Write;
+                    let mut stdout = std::io::stdout().lock();
+                    stdout.write_all(&export.patch)?;
+                    stdout.flush()?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod change_notes_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<SkillsCommand, clap::Error> {
+        let mut full = vec!["skills-manager-cli", "skills"];
+        full.extend_from_slice(args);
+        match Cli::try_parse_from(full).map(|cli| cli.command) {
+            Ok(Commands::Skills(SkillsArgs { command })) => Ok(command),
+            Ok(other) => panic!("unexpected command {other:?}"),
+            Err(err) => Err(err),
+        }
+    }
+
+    #[test]
+    fn parses_the_changes_commands() {
+        assert!(matches!(
+            parse(&["changes", "browser"]).unwrap(),
+            SkillsCommand::Changes(ChangesArgs { command: None, reference: Some(r) }) if r == "browser"
+        ));
+        assert!(matches!(
+            parse(&["changes", "note", "browser", "SKILL.md", "Windows paths"]).unwrap(),
+            SkillsCommand::Changes(ChangesArgs {
+                command: Some(ChangesCommand::Note { reference, path, note: Some(note), clear: false }),
+                ..
+            }) if reference == "browser" && path == "SKILL.md" && note == "Windows paths"
+        ));
+        assert!(matches!(
+            parse(&["changes", "note", "browser", "SKILL.md", "--clear"]).unwrap(),
+            SkillsCommand::Changes(ChangesArgs {
+                command: Some(ChangesCommand::Note { note: None, clear: true, .. }),
+                ..
+            })
+        ));
+        assert!(parse(&["changes", "note", "browser", "SKILL.md"]).is_err());
+        assert!(parse(&["changes", "note", "browser", "SKILL.md", "x", "--clear"]).is_err());
+        assert!(matches!(
+            parse(&["changes", "export", "browser", "--output", "out.patch"]).unwrap(),
+            SkillsCommand::Changes(ChangesArgs {
+                command: Some(ChangesCommand::Export { reference, output: Some(out) }),
+                ..
+            }) if reference == "browser" && out == PathBuf::from("out.patch")
+        ));
+        assert!(matches!(
+            parse(&["changes", "export", "browser"]).unwrap(),
+            SkillsCommand::Changes(ChangesArgs {
+                command: Some(ChangesCommand::Export { output: None, .. }),
+                ..
+            })
+        ));
+        assert!(parse(&["changes"]).is_err());
+    }
 }
 
 #[cfg(test)]

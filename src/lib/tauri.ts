@@ -875,3 +875,7 @@ export * from "./evaluationApi";
 // ── Local changes against the baseline (sm-69q.3) ──
 
 export * from "./localChangesApi";
+
+// ── Change notes and patch export (sm-69q.8) ──
+
+export * from "./changeNotesApi";

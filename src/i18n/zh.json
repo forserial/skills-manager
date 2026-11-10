@@ -1159,7 +1159,14 @@
     "markerChangedTitle_other": "{{count}} 个文件与上游原始版本不同",
     "markerUnknown": "基线未知",
     "unknownHint": "没有该技能上游原始版本的记录，无法区分你的改动。",
-    "suspectHint": "该技能有待解决的库同步冲突，其上游原始版本记录可能不准确。请先解决冲突。"
+    "suspectHint": "该技能有待解决的库同步冲突，其上游原始版本记录可能不准确。请先解决冲突。",
+    "addNote": "添加备注",
+    "editNote": "编辑备注",
+    "notePlaceholder": "用一行说明这个文件为什么不同",
+    "noteHint": "回车保存，Esc 取消。留空即删除备注。文件恢复到与上游一致后，备注会自动移除。",
+    "exportPatch": "导出补丁",
+    "exportFilter": "补丁",
+    "exported_other": "已将 {{count}} 个改动的文件导出到 {{path}}"
   },
   "pin": {
     "title": "固定",

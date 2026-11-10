@@ -1042,6 +1042,10 @@ pub fn run() {
             commands::baseline::get_skill_local_changes,
             commands::baseline::get_local_change_markers,
             commands::baseline::get_skill_local_diff,
+            // Change notes and patch export (fork, sm-69q.8)
+            commands::change_notes::get_skill_change_notes,
+            commands::change_notes::set_skill_change_note,
+            commands::change_notes::export_skill_local_patch,
             // Pins and upstream commits (fork, sm-69q.5)
             commands::pinning::get_skill_pin,
             commands::pinning::pin_skill,
