@@ -38,6 +38,7 @@ import { useApp } from "../context/AppContext";
 import { useSkillViewMode } from "../hooks/useSkillViewMode";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { HeldUpdateDialog } from "../components/HeldUpdateDialog";
 import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
@@ -816,6 +817,9 @@ export function MySkills() {
     skill: ManagedSkill;
     removals: api.PendingRemoval[];
     approval: string | null;
+    /** Local edits the update would replace, and why (sm-69q.4). */
+    overwrites?: api.PendingOverwrite[];
+    overwriteReason?: api.OverwriteReason | null;
     /** Set when the pending replacement is a relink, so confirming re-uses the
      *  directory the user already chose instead of asking for it again. */
     relinkSource?: string;
@@ -911,12 +915,16 @@ export function MySkills() {
       } else {
         const result = await api.updateSkill(skill.id, approvedRemovals);
         // Nothing was changed: the update would have taken away files the new
-        // version does not have. Show them and let the user decide (#256).
-        if (result.pending_removals.length > 0) {
+        // version does not have (#256), or replaced local edits (sm-69q.4).
+        // Show them and let the user decide.
+        const overwrites = result.pending_overwrites ?? [];
+        if (result.pending_removals.length > 0 || overwrites.length > 0) {
           setPendingRemoval({
             skill,
             removals: result.pending_removals,
             approval: result.removal_approval,
+            overwrites,
+            overwriteReason: result.overwrite_reason ?? null,
           });
           return;
         }
@@ -2086,20 +2094,12 @@ export function MySkills() {
         onProjectsChanged={refreshProjects}
       />
 
-      <ConfirmDialog
+      <HeldUpdateDialog
         open={pendingRemoval !== null}
-        tone="warning"
-        title={t("mySkills.updateActions.removalTitle")}
-        message={t("mySkills.updateActions.removalMessage", {
-          name: pendingRemoval?.skill.name ?? "",
-          count: pendingRemoval?.removals.length ?? 0,
-        })}
-        // Every path, never a truncated sample: recognising one's own file is
-        // the whole point, and it might be the twenty-first.
-        details={pendingRemoval?.removals.map((r) =>
-          r.location === "library" ? r.path : `${r.location}: ${r.path}`
-        )}
-        confirmLabel={t("mySkills.updateActions.removalConfirm")}
+        skillName={pendingRemoval?.skill.name ?? ""}
+        removals={pendingRemoval?.removals ?? []}
+        overwrites={pendingRemoval?.overwrites}
+        reason={pendingRemoval?.overwriteReason}
         onClose={() => setPendingRemoval(null)}
         onConfirm={async () => {
           const target = pendingRemoval?.skill;

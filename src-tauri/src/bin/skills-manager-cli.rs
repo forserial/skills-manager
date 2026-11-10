@@ -700,6 +700,34 @@ struct UpdateReport {
     /// Skipped by `--all` because the skill is pinned (sm-69q.5).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pinned: bool,
+    #[serde(flatten)]
+    overwrites: HeldOverwrites,
+}
+
+/// Locally changed files an update was held back over (sm-69q.4). Like
+/// `held_back_removals`, nothing changed and the CLI offers no way to accept.
+#[derive(Debug, Default, Serialize)]
+struct HeldOverwrites {
+    /// `library: <path>` for each file whose local edit would be replaced.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    held_back_overwrites: Vec<String>,
+    /// local_changes, or baseline_not_backfilled / baseline_unrecoverable /
+    /// baseline_suspect when the baseline could not tell which files changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held_back_reason: Option<app_lib::core::baseline::OverwriteReason>,
+}
+
+impl HeldOverwrites {
+    fn of(result: &cmd::UpdateSkillResult) -> Self {
+        Self {
+            held_back_overwrites: result
+                .pending_overwrites
+                .iter()
+                .map(|o| format!("{}: {}", o.location, o.path))
+                .collect(),
+            held_back_reason: result.overwrite_reason,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -2002,6 +2030,7 @@ impl UpdateReport {
             error: None,
             held_back_removals: Vec::new(),
             pinned: true,
+            overwrites: HeldOverwrites::default(),
         }
     }
 }
@@ -2362,6 +2391,7 @@ fn run_update(
                             .map(|p| format!("{}: {}", p.location, p.path))
                             .collect(),
                         pinned: false,
+                        overwrites: HeldOverwrites::of(&r),
                     },
                     Err(e) => UpdateReport {
                         skill_id: skill.id.clone(),
@@ -2371,6 +2401,7 @@ fn run_update(
                         error: Some(e.message.clone()),
                         held_back_removals: Vec::new(),
                         pinned: false,
+                        overwrites: HeldOverwrites::default(),
                     },
                 }
             }
@@ -2387,6 +2418,7 @@ fn run_update(
                         .map(|p| format!("{}: {}", p.location, p.path))
                         .collect(),
                     pinned: false,
+                    overwrites: HeldOverwrites::default(),
                 },
                 Err(e) => UpdateReport {
                     skill_id: skill.id.clone(),
@@ -2396,6 +2428,7 @@ fn run_update(
                     error: Some(e.message.clone()),
                     held_back_removals: Vec::new(),
                     pinned: false,
+                    overwrites: HeldOverwrites::default(),
                 },
             },
             other => UpdateReport {
@@ -2406,6 +2439,7 @@ fn run_update(
                 error: Some(format!("source type '{other}' cannot be refreshed")),
                 held_back_removals: Vec::new(),
                 pinned: false,
+                overwrites: HeldOverwrites::default(),
             },
         };
         reports.push(report);
@@ -4576,5 +4610,34 @@ name: held
         let single = run_update(&store, Some("held"), false).unwrap();
         let message = single[0].error.as_deref().unwrap();
         assert!(message.contains("skills unpin held"), "{message}");
+    }
+
+    // sm-69q.4: the update path itself is tested end to end in
+    // core::baseline::overwrites; this pins the CLI's JSON shape.
+    #[test]
+    fn update_reports_held_overwrites_beside_removals_and_omits_them_when_empty() {
+        let report = |overwrites| UpdateReport {
+            skill_id: "id".to_string(),
+            name: "demo".to_string(),
+            source_type: "git".to_string(),
+            refreshed: false,
+            error: None,
+            held_back_removals: Vec::new(),
+            pinned: false,
+            overwrites,
+        };
+        let plain = serde_json::to_value(report(HeldOverwrites::default())).unwrap();
+        assert!(plain.get("held_back_overwrites").is_none(), "{plain}");
+        assert!(plain.get("held_back_reason").is_none(), "{plain}");
+
+        let held = serde_json::to_value(report(HeldOverwrites {
+            held_back_overwrites: vec!["library: SKILL.md".to_string()],
+            held_back_reason: Some(app_lib::core::baseline::OverwriteReason::LocalChanges),
+        }))
+        .unwrap();
+        assert_eq!(held["refreshed"], false);
+        assert_eq!(held["held_back_overwrites"][0], "library: SKILL.md");
+        assert_eq!(held["held_back_reason"], "local_changes");
+        assert!(held["error"].is_null(), "a hold is not an error");
     }
 }

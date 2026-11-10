@@ -333,12 +333,35 @@ export interface UpdateSkillResult {
    * approves that list at that revision and nothing else.
    */
   removal_approval: string | null;
+  /**
+   * Library files the update would replace although they were changed
+   * locally (sm-69q.4). Non-empty means nothing was changed, as for
+   * `pending_removals`; the same `removal_approval` approves both.
+   */
+  pending_overwrites?: PendingOverwrite[];
+  /** Why `pending_overwrites` holds; null when it is empty. */
+  overwrite_reason?: OverwriteReason | null;
 }
 
 export interface PendingRemoval {
   /** `"library"`, or the agent key whose deployed copy holds it. */
   location: string;
   path: string;
+}
+
+/** Why an update holds files it would overwrite (sm-69q.4). */
+export type OverwriteReason =
+  | "local_changes"
+  | "baseline_not_backfilled"
+  | "baseline_unrecoverable"
+  | "baseline_suspect";
+
+export interface PendingOverwrite {
+  /** Always `"library"`. */
+  location: string;
+  path: string;
+  /** How the library copy differs from its baseline; null when unknown. */
+  local: "modified" | "added" | "deleted" | null;
 }
 
 /** `approvedRemovals` carries back `removal_approval` from a declined call. */
@@ -351,7 +374,8 @@ export const updateSkill = (skillId: string, approvedRemovals?: string | null) =
 export interface BatchUpdateSkillsResult {
   refreshed: number;
   unchanged: number;
-  /** Skills left alone because updating would have removed files. */
+  /** Skills left alone because updating would have removed files or
+   *  replaced local edits (sm-69q.4). */
   held_back: string[];
   failed: string[];
   /** Pinned skills, skipped without trying (sm-69q.5). */
