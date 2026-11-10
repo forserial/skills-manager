@@ -75,7 +75,7 @@
 - **Add from Library sheet** — In any workspace, click **+ Add Skills** to open a unified picker: search your central library, toggle target agents with always-visible chips (with select-all/clear), and batch-add multiple skills in one click.
 - **Batch operations** — Multi-select skills for bulk enable/disable, export, or delete. Project Workspaces also support bulk enable/disable for project-local skills.
 - **Skill tagging and filters** — Tag skills, use tags to group similar skills, and filter by source or tag — including an **Untagged** pill to quickly find skills missing labels.
-- **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
+- **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones. Your own edits to a skill survive its updates — see [Keep your changes to a skill](#keep-your-changes-to-a-skill).
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
 - **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
 - **Backup & multi-device sync** — Connect a private GitHub repository with one sign-in (or any Git remote), and the app backs your library up automatically and keeps all connected devices in sync. Merges are skill-aware — a rename on one machine combines cleanly with an edit on another — and true conflicts never block: your local version stays put until you choose keep mine / use remote / keep both. Snapshot versions are restorable at any time.
@@ -128,6 +128,18 @@ It is also an ordinary published skill, so it can be installed without the app:
 ```bash
 npx skills add xingkongliang/skills-manager
 ```
+
+## Keep your changes to a skill
+
+A skill installed from Git can be edited in the library and still be updated. Skills Manager remembers what upstream shipped (a *baseline*), so it can tell your changes from upstream's:
+
+- **Updating one skill merges.** Your edits are carried onto the new version, file by file, and a file you added stays. When your edit and upstream's touch the same lines, nothing changes and the update waits for you: keep mine, take theirs, or open both versions.
+- **Nothing is overwritten unasked.** **Update all** and the automatic updater never merge: they leave an edited skill alone and say so.
+- **See what is yours.** The detail panel lists **Your changes** with a diff, each changed file can carry a one-line note, and the changes export as a patch. An **Edited** badge marks the card.
+- **Pin** a skill at the revision you reviewed, and see the upstream commits since before you move it.
+- **Borrow without merging.** **Fork** a skill into your own copy that still watches where it came from, or (from the CLI) watch any Git location you took an idea from; checking for updates tells you when it moves.
+
+These records travel with the library through Backup. Two limits: a device running a build without this feature still overwrites edits when it updates, and when an existing library first connects to a backup by cloning it, the backup's records replace the local ones. The [`manage-skills`](skills/manage-skills/SKILL.md#adapted-skills-local-changes-that-survive-updates) skill documents the CLI.
 
 ## Backup & Multi-Device Sync
 

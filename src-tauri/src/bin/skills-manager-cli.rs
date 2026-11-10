@@ -4998,3 +4998,8 @@ name: held
         assert_eq!(held["merge_conflicts"][0]["kind"], "text");
     }
 }
+
+// sm-69q.11: the adapted-skills scenarios through the CLI.
+#[cfg(test)]
+#[path = "skills-manager-cli-tests/adapted_skills.rs"]
+mod adapted_skills_tests;

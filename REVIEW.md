@@ -36,6 +36,12 @@ metadata, migrates data, or touches release and CI. In practice, any change to:
 | `core/sync_metadata.rs` | Startup reindex rebuilds the database from metadata: anything written to the DB but not to metadata is gone at the next launch (#553) |
 | `core/git_fetcher.rs`, `core/git_backup.rs`, `core/auto_backup.rs`, `core/repo_lock.rs`, `core/git2_engine.rs` | Cache slots, locks, network git, clone and reclone (#429, #515, #519) |
 | `core/central_repo.rs`, `core/migrations.rs`, `core/content_hash.rs` | Library location, schema, and the hash that identifies stored content |
+| `core/fork_files.rs` | Fork-owned per-skill state lives in flat `.skills-manager/fork-<concern>.<id>.json` files. A subfolder there is dropped by the library's three-way merge, and a file beside the skill metadata breaks the reindex (sm-69q.1). Files must go when their skill is deleted, and nothing may be written inside a skill folder |
+| `core/baseline.rs`, `core/baseline/` | The record of what upstream shipped. A missing or wrong baseline makes an edited file look pristine, so the next update overwrites it; the overwrite hold, "baseline suspect" during a sync conflict and the baseline kept on resolving it (Rules A and B) all live here (sm-69q.2–.4) |
+| `core/pinning.rs` | An update path that skips the pin check moves a skill the user froze after reviewing it (sm-69q.5) |
+| `core/watched_upstreams.rs` | `fork` writes a new skill: it must leave the original untouched and give the copy its own name, since an exact copy made the original's reference ambiguous; network checks must stay off the repo lock (sm-69q.7) |
+| `core/change_notes.rs` | A note must follow its path and drop only when the file matches the baseline again, and an exported patch must apply to the baseline revision (sm-69q.8) |
+| `core/skill_update_merge/` | Decides every file of a merging update. A wrong row in the per-file plan, rename following, or CRLF handling loses an edit or keeps stale upstream content without a word; nothing may reach the library until the whole merge is clean, and unattended callers must never merge (sm-69q.6) |
 | `core/tool_adapters.rs`, when it **changes** an existing adapter's paths | Retargeting removes the old deployments; several adapters can share one directory |
 | `.github/workflows/**`, `scripts/prepare-release.mjs`, `src-tauri/tauri.conf.json`, dependency manifests | Release assets: the Homebrew cask and the Scoop Extras manifest fetch assets by name, and `productName` fixes those names; supply chain |
 

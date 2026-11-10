@@ -187,6 +187,34 @@ pub fn refine_unknown_reason(check: &mut OverwriteCheck, skill: &SkillRecord, pr
     }
 }
 
+/// Whether upstream's tree, hashing to `upstream_hash`, is still the one the
+/// baseline describes while the library differs from it by local changes
+/// (sm-69q.11). An update that does not merge then has nothing to take, and
+/// keeps the library as it is instead of holding: staging upstream's tree
+/// would only put back upstream's own copies of the edited files, and the
+/// hold reported "your edits would be replaced" on every `update --all` even
+/// when upstream had not moved.
+///
+/// A content-hash match is proof (design §11.3). A mismatch, a missing hash,
+/// an unreadable baseline, or a baseline that is unknown or suspect (Rule A)
+/// answers false, and the update goes on to the usual overwrite check.
+pub fn upstream_unchanged_since_baseline(
+    store: &SkillStore,
+    skill: &SkillRecord,
+    upstream_hash: &str,
+) -> bool {
+    let Ok(Some(baseline)) = super::load(&skill.id) else {
+        return false;
+    };
+    if baseline.content_hash.as_deref() != Some(upstream_hash) {
+        return false;
+    }
+    matches!(
+        local_changes(store, skill).map(|changes| changes.state),
+        Ok(LocalState::Changed)
+    )
+}
+
 /// The log line unattended callers write for a skill held over overwrites.
 pub fn log_held_overwrites(skill_id: &str, result: &crate::commands::skills::UpdateSkillResult) {
     if result.pending_overwrites.is_empty() {
