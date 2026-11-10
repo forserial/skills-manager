@@ -4,12 +4,18 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillBorrowedFromSection } from "./SkillBorrowedFromSection";
 import type { ManagedSkill } from "../lib/tauri";
-import { upstreamWebUrl, type WatchedUpstream } from "../lib/watchedUpstreamsApi";
+import {
+  upstreamWebUrl,
+  WATCHED_UPSTREAMS_CHANGED,
+  type WatchedUpstream,
+} from "../lib/watchedUpstreamsApi";
 
 const api = vi.hoisted(() => ({
   getWatchedUpstreams: vi.fn(),
   checkWatchedUpstreams: vi.fn(),
   markWatchedUpstreamSeen: vi.fn(),
+  addWatchedUpstream: vi.fn(),
+  removeWatchedUpstream: vi.fn(),
   openUrl: vi.fn(),
 }));
 const messages = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -21,6 +27,8 @@ vi.mock("../lib/watchedUpstreamsApi", async (importOriginal) => ({
   getWatchedUpstreams: api.getWatchedUpstreams,
   checkWatchedUpstreams: api.checkWatchedUpstreams,
   markWatchedUpstreamSeen: api.markWatchedUpstreamSeen,
+  addWatchedUpstream: api.addWatchedUpstream,
+  removeWatchedUpstream: api.removeWatchedUpstream,
 }));
 
 const skill: ManagedSkill = {
@@ -70,12 +78,91 @@ const render = async () => {
 };
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
+/** Set a controlled input's value the way React notices. */
+const type = async (selector: string, value: string) => {
+  const input = container.querySelector<HTMLInputElement>(selector)!;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 
 describe("SkillBorrowedFromSection", () => {
-  it("renders nothing for a skill that watches nothing", async () => {
+  it("shows only the title, a hint and Add for a skill that watches nothing", async () => {
     api.getWatchedUpstreams.mockResolvedValue([]);
     await render();
-    expect(container.innerHTML).toBe("");
+    expect(container.textContent).toContain("borrowed.title");
+    expect(container.textContent).toContain("borrowed.emptyHint");
+    expect(button("borrowed.add")).toBeDefined();
+    expect(button("borrowed.check")).toBeUndefined();
+    expect(container.querySelector("ul")).toBeNull();
+  });
+
+  it("adds a watch from the form, trimming fields, and tells the card markers", async () => {
+    api.getWatchedUpstreams.mockResolvedValue([]);
+    api.addWatchedUpstream.mockResolvedValue(watch({ moved: false, remote_revision: null }));
+    const changed = vi.fn();
+    window.addEventListener(WATCHED_UPSTREAMS_CHANGED, changed);
+    await render();
+
+    await act(async () => button("borrowed.add")!.click());
+    const form = container.querySelector('[data-testid="borrowed-add-form"]')!;
+    expect(form).not.toBeNull();
+    const submit = [...form.querySelectorAll("button")].find((b) => b.type === "submit")!;
+    expect(submit.disabled).toBe(true);
+
+    await type("#borrowed-url", "  https://github.com/owner/repo  ");
+    await type("#borrowed-branch", "main");
+    await type("#borrowed-subpath", " skills/x ");
+    await type("#borrowed-note", "lifted the retry loop");
+    expect(submit.disabled).toBe(false);
+    await act(async () => submit.click());
+
+    expect(api.addWatchedUpstream).toHaveBeenCalledWith("mine", {
+      gitUrl: "https://github.com/owner/repo",
+      branch: "main",
+      subpath: "skills/x",
+      note: "lifted the retry loop",
+    });
+    expect(container.querySelector('[data-testid="borrowed-add-form"]')).toBeNull();
+    expect(container.textContent).toContain("https://github.com/owner/repo.git");
+    expect(container.textContent).not.toContain("borrowed.emptyHint");
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(messages.success).toHaveBeenCalledWith("borrowed.added");
+    window.removeEventListener(WATCHED_UPSTREAMS_CHANGED, changed);
+  });
+
+  it("keeps the form and what was typed when adding fails", async () => {
+    api.getWatchedUpstreams.mockResolvedValue([]);
+    api.addWatchedUpstream.mockRejectedValue({ kind: "network", message: "Could not resolve x" });
+    await render();
+    await act(async () => button("borrowed.add")!.click());
+    await type("#borrowed-url", "https://example.invalid/x.git");
+    await act(async () => button("borrowed.addConfirm")!.click());
+
+    expect(messages.error).toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="borrowed-add-form"]')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>("#borrowed-url")!.value).toBe(
+      "https://example.invalid/x.git",
+    );
+  });
+
+  it("removes a watch after confirming", async () => {
+    api.getWatchedUpstreams.mockResolvedValue([watch()]);
+    api.removeWatchedUpstream.mockResolvedValue(watch());
+    await render();
+
+    const trash = container.querySelector<HTMLButtonElement>('button[aria-label="borrowed.remove"]')!;
+    await act(async () => trash.click());
+    expect(container.textContent).toContain("borrowed.removeTitle");
+    expect(api.removeWatchedUpstream).not.toHaveBeenCalled();
+
+    await act(async () => button("borrowed.remove")!.click());
+    expect(api.removeWatchedUpstream).toHaveBeenCalledWith("mine", "ab12cd34");
+    expect(container.textContent).not.toContain("https://github.com/owner/repo.git");
+    expect(container.textContent).toContain("borrowed.emptyHint");
+    expect(messages.success).toHaveBeenCalledWith("borrowed.removed");
   });
 
   it("lists watched upstreams with a moved marker, and mark as seen clears it", async () => {

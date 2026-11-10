@@ -53,6 +53,8 @@ import { useEvaluateCardAction } from "../hooks/useEvaluateCardAction";
 import { useForkCardAction } from "../hooks/useForkCardAction";
 import { useLocalChangeMarkers } from "../hooks/useLocalChangeMarkers";
 import { LocalChangeMarker } from "../components/LocalChangeMarker";
+import { useWatchedUpstreamMarkers } from "../hooks/useWatchedUpstreamMarkers"; // sm-69q.13
+import { WatchedUpstreamMarker } from "../components/WatchedUpstreamMarker";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -178,6 +180,7 @@ export function MySkills() {
   const evaluateAction = useEvaluateCardAction();
   const { forkAction, dialog: forkDialog } = useForkCardAction();
   const localMarkers = useLocalChangeMarkers(skills);
+  const watchedMarkers = useWatchedUpstreamMarkers(skills);
   const [viewMode, setViewMode, groupBySource, setGroupBySource] = useSkillViewMode();
   // Grouping is a view preference, so it persists; which groups are open is
   // session state, because a group the user expanded once is not a statement
@@ -1747,10 +1750,11 @@ export function MySkills() {
                     <p className="text-[13px] leading-[18px] text-muted truncate">
                       {skill.description || "—"}
                     </p>
-                    {((badge && !showUpdatePill) || conflictIds.has(skill.id) || evaluationSummaries[skill.id] || localMarkers[skill.id]) && (
+                    {((badge && !showUpdatePill) || conflictIds.has(skill.id) || evaluationSummaries[skill.id] || localMarkers[skill.id] || !!watchedMarkers[skill.id]?.moved_count) && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         <EvaluationGradeBadge summary={evaluationSummaries[skill.id]} />
                         <LocalChangeMarker marker={localMarkers[skill.id]} />
+                        <WatchedUpstreamMarker marker={watchedMarkers[skill.id]} />
                         {conflictIds.has(skill.id) && (
                           <button
                             onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
@@ -1998,6 +2002,7 @@ export function MySkills() {
                   )}
                   <EvaluationGradeBadge summary={evaluationSummaries[skill.id]} />
                   <LocalChangeMarker marker={localMarkers[skill.id]} />
+                  <WatchedUpstreamMarker marker={watchedMarkers[skill.id]} />
                   <SyncDots
                     skill={skill}
                     tools={tools}
