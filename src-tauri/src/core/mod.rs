@@ -6,6 +6,7 @@ pub mod baseline;
 pub mod central_repo;
 pub mod change_notes;
 pub mod cli_bridge;
+pub mod clone_metadata_carry;
 pub mod content_hash;
 pub mod crypto;
 pub mod error;

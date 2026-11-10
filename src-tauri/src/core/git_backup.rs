@@ -1191,6 +1191,7 @@ pub(crate) fn clone_into_unlocked(
     if let Err(e) = merge_backup(&backup, skills_dir) {
         return give_up(e.context("Failed to copy local skills into the clone"));
     }
+    if let Err(e) = super::clone_metadata_carry::carry_local_metadata(&backup, skills_dir) { return give_up(e); }
     // Last, so nothing that can fail comes after it.
     let local_copies = if diverging.is_empty() {
         None

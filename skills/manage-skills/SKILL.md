@@ -413,12 +413,18 @@ Never edit or delete these files by hand; removing a skill removes them.
   next update on this build. Keep such devices out of a sync group that holds
   adapted skills.
 - **First connect by clone.** When an existing library first clones a backup
-  remote, the remote's metadata folder replaces the local one: local baselines,
-  pins, watches and notes are dropped without a message, and a skill that only
-  the local library has loses its library record (its folder stays, unmanaged).
-  Skills present on both sides take the remote's state (one whose content
-  differs stops the clone until the app sets the local copy aside). Connect
-  the device that holds the adapted skills first and clone the others from it.
+  remote (or re-clones it), the remote's metadata stays and what only the local
+  library has is merged in, file by file. A skill only the local library has
+  keeps its library record, source, tags, baseline, pin, notes and watches. A
+  local-only preset is kept, and a local preset whose name the remote already
+  uses is merged into the remote's. Memberships that involve a local-only skill
+  or preset come along. A skill present on both sides ends with the remote's
+  record and state (a local baseline, pin, note or watch for it is not
+  carried). One whose content differs stops the clone until the app sets the
+  local copy aside. Local metadata that cannot be read stops the clone and
+  leaves the library as it was. **An upstream build of Skills Manager still
+  drops local-only skills on first connect:** their folders stay but lose
+  their records. Connect such a device by cloning into an empty library.
 
 ## Remove
 

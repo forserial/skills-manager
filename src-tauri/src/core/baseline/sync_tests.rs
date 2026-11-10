@@ -391,12 +391,12 @@ fn keep_local_without_a_local_baseline_leaves_it_unknown() {
 }
 
 /// When an existing library first connects to a remote by clone, the
-/// clone's `.skills-manager/` replaces the local one (`diverging_entries`
-/// skips it and `merge_backup` copies only entries the clone lacks). Local
-/// baselines are dropped without a message; the skills read "baseline
-/// unknown", which is safe. This records that behaviour.
+/// clone's `.skills-manager/` stays and what only the local library has is
+/// carried in file by file (sm-69q.15, `clone_metadata_carry`): a local-only
+/// skill keeps its record and its baseline. Until sm-69q.15 the baseline was
+/// dropped (and the record with it).
 #[test]
-fn first_connect_by_clone_drops_local_baselines() {
+fn first_connect_by_clone_keeps_local_only_baselines() {
     let env = setup();
     let (_a, _b) = seeded(&env);
 
@@ -411,9 +411,9 @@ fn first_connect_by_clone_drops_local_baselines() {
         let _lock = crate::core::repo_lock::RepoLock::acquire_foreground("test").unwrap();
         git_backup::clone_into_unlocked(&c.skills, env.remote.to_str().unwrap(), &[]).unwrap();
     }
-    // The local skill's folder is kept; its baseline is not.
+    // The local-only skill keeps its folder and its baseline.
     assert!(c.skills.join("gamma/SKILL.md").is_file());
-    assert_eq!(c.baseline("skill-c"), None);
+    assert_eq!(c.revision("skill-c").as_deref(), Some(REV1));
     // The remote's baselines arrive with its metadata.
     assert_eq!(c.revision(ID).as_deref(), Some(REV1));
 }
