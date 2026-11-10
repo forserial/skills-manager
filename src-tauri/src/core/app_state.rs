@@ -173,6 +173,7 @@ fn initialize_store_inner(
 
     timings.skill_count = store.get_all_skills().map(|s| s.len()).unwrap_or(0);
 
+    super::swap_leftovers::recover_at_startup(&store); // sm-69q.23: before the reindex looks for folders
     if sync_metadata::metadata_exists() {
         let step = Instant::now();
         reindex_or_rebuild_metadata(&store)?;

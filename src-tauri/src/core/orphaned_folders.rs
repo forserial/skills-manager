@@ -58,7 +58,21 @@ apart. set-source refuses when the folder differs from upstream (and --force rep
 with upstream's copy), so check with --dry-run first; afterwards `skills diff --upstream` \
 compares the skill with upstream.";
 
-/// A top-level library folder that no skill record points at.
+/// What kind of folder [`find`] listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderKind {
+    /// A folder no record points at; the only kind that can be adopted.
+    Unmanaged,
+    /// `.X.staged-<uuid>`: a copy an install or update was making (sm-69q.23).
+    Staged,
+    /// `.X.backup-<uuid>`: the old copy an update set aside (sm-69q.23).
+    Backup,
+}
+
+/// A top-level library folder that no skill record points at, or a hidden
+/// copy an interrupted install or update left that the startup step neither
+/// put back nor removed (see `swap_leftovers`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OrphanedFolder {
     /// The folder's name at the library root; what `adopt` takes.
@@ -73,6 +87,9 @@ pub struct OrphanedFolder {
     pub size: u64,
     /// Newest modification time under it, Unix milliseconds.
     pub modified: Option<i64>,
+    pub kind: FolderKind,
+    /// For a staged or backup folder: what it is and what to do with it.
+    pub note: Option<String>,
 }
 
 /// A folder [`adopt`] gave a record.
@@ -137,10 +154,45 @@ fn find_in(store: &SkillStore, root: &Path) -> Result<Vec<OrphanedFolder>> {
             name,
             size,
             modified,
+            kind: FolderKind::Unmanaged,
+            note: None,
         });
+    }
+    // sm-69q.23: the hidden copies, which no folder name above includes.
+    let now = std::time::SystemTime::now();
+    for leftover in super::swap_leftovers::find_in(store, root) {
+        found.push(leftover_folder(root, &leftover, now));
     }
     found.sort_by(|a, b| a.dir_name.to_lowercase().cmp(&b.dir_name.to_lowercase()));
     Ok(found)
+}
+
+fn leftover_folder(
+    root: &Path,
+    leftover: &super::swap_leftovers::Leftover,
+    now: std::time::SystemTime,
+) -> OrphanedFolder {
+    let path = &leftover.path;
+    let dir_name = path
+        .strip_prefix(root)
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().to_string());
+    let has_skill_md = skill_metadata::is_valid_skill_dir(path);
+    let leaf = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let (size, modified) = size_and_modified(path);
+    OrphanedFolder {
+        name: has_skill_md.then(|| skill_name(path, &leaf)),
+        dir_name,
+        path: path.to_string_lossy().to_string(),
+        has_skill_md,
+        size,
+        modified,
+        kind: match leftover.kind {
+            super::swap_leftovers::LeftoverKind::Staged => FolderKind::Staged,
+            super::swap_leftovers::LeftoverKind::Backup => FolderKind::Backup,
+        },
+        note: Some(super::swap_leftovers::describe(leftover, now)),
+    }
 }
 
 /// `.git`, `.skills-manager`, every other dot-folder (staged and swap
@@ -192,6 +244,13 @@ fn adopt_unlocked(
     root: &Path,
     folder: &OrphanedFolder,
 ) -> Result<AdoptedFolder, AppError> {
+    if folder.kind != FolderKind::Unmanaged {
+        return Err(AppError::invalid_input(format!(
+            "'{}' is the hidden copy an interrupted install or update left, not a skill to adopt. {}",
+            folder.dir_name,
+            folder.note.as_deref().unwrap_or_default()
+        )));
+    }
     let dir = root.join(&folder.dir_name);
     if !skill_metadata::is_valid_skill_dir(&dir) {
         return Err(AppError::invalid_input(format!(

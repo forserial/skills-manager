@@ -47,6 +47,7 @@ pub mod skill_store;
 pub mod skill_update_merge;
 pub mod skillssh_api;
 pub mod sync_engine;
+pub mod swap_leftovers; // sm-69q.23
 pub mod sync_metadata;
 pub mod timing;
 pub mod tool_adapters;

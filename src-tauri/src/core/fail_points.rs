@@ -13,8 +13,14 @@ pub(crate) fn hit(_name: &'static str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A crash at `name` (sm-69q.23): nothing after it runs, as when the process
+/// dies there. Outside tests it does nothing.
+#[cfg(not(test))]
+#[inline(always)]
+pub(crate) fn crash(_name: &'static str) {}
+
 #[cfg(test)]
-pub(crate) use test_points::{arm, hit};
+pub(crate) use test_points::{arm, crash, hit};
 
 #[cfg(test)]
 mod test_points {
@@ -29,6 +35,15 @@ mod test_points {
             return Err(std::io::Error::other(format!("injected failure: {name}")));
         }
         Ok(())
+    }
+
+    /// When `name` is armed, panic: the test catches the unwind and looks at
+    /// what the step before left on disk. Unlike a failure, no error path
+    /// runs in the function that crashed.
+    pub(crate) fn crash(name: &'static str) {
+        if hit(name).is_err() {
+            panic!("injected crash: {name}");
+        }
     }
 
     /// Fail `name` on this thread until the guard is dropped.

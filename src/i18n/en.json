@@ -246,7 +246,9 @@
     "adopted": "Adopted {{name}} as a local skill",
     "adoptFailed": "Could not adopt the folder",
     "noSkillMd": "no SKILL.md",
-    "noSkillMdHint": "Only a folder with a SKILL.md can be adopted. Add one, or move the folder out of the library."
+    "noSkillMdHint": "Only a folder with a SKILL.md can be adopted. Add one, or move the folder out of the library.",
+    "staged": "Hidden copy an install or update was making. Not a skill: it cannot be adopted. If it may still be in use it is kept; a later start removes it once it has not changed for an hour.",
+    "backup": "Hidden old copy an update set aside. Not a skill: it cannot be adopted. Startup puts it back when its skill folder is missing and it is the only copy; otherwise rename the right copy yourself, or remove it."
   },
   "mySkills": {
     "title": "Library",

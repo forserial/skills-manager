@@ -30,6 +30,8 @@ const folder = (overrides: Partial<OrphanedFolder> = {}): OrphanedFolder => ({
   name: "lost",
   size: 2048,
   modified: 1_700_000_000_000,
+  kind: "unmanaged",
+  note: null,
   ...overrides,
 });
 
@@ -91,6 +93,23 @@ describe("OrphanedFoldersNotice", () => {
     expect(rows()[1].textContent).toContain("orphanedFolders.noSkillMd");
     expect(buttonIn(rows()[1], "orphanedFolders.adopt")!.disabled).toBe(true);
     expect(buttonIn(rows()[0], "orphanedFolders.adopt")!.disabled).toBe(false);
+  });
+
+  it("shows an interrupted install's hidden copies with their kind, never adoptable", async () => {
+    api.getOrphanedFolders.mockResolvedValue([
+      folder({ dir_name: ".keep.staged-1", name: "keep", kind: "staged", note: "may still be in use" }),
+      folder({ dir_name: ".keep.backup-2", name: "keep", kind: "backup", note: "an old copy" }),
+    ]);
+    await render();
+    await openList();
+
+    const kinds = rows().map((r) => r.querySelector('[data-testid="orphaned-folder-leftover"]')?.textContent);
+    expect(kinds).toEqual(["orphanedFolders.staged", "orphanedFolders.backup"]);
+    for (const row of rows()) {
+      const adopt = buttonIn(row, "orphanedFolders.adopt")!;
+      expect(adopt.disabled).toBe(true);
+    }
+    expect(buttonIn(rows()[0], "orphanedFolders.adopt")!.title).toBe("may still be in use");
   });
 
   it("adopts a folder, reloads the skills and drops it from the list", async () => {
