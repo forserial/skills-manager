@@ -1033,6 +1033,11 @@ pub fn run() {
             commands::skills::reimport_local_skill,
             commands::skills::relink_local_skill_source,
             commands::skills::detach_local_skill_source,
+            // Watched upstreams and fork (fork, sm-69q.7)
+            commands::watched_upstreams::get_watched_upstreams,
+            commands::watched_upstreams::check_watched_upstreams,
+            commands::watched_upstreams::mark_watched_upstream_seen,
+            commands::watched_upstreams::fork_skill,
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
             commands::skills::rename_tag,

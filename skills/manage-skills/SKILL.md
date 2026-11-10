@@ -270,6 +270,49 @@ is unknown. Recording it changes no update behaviour yet.
 - Baselines live in `.skills-manager/fork-baseline.<skill_id>.json` and sync with the library. Never edit or delete them by hand; removing a skill removes its baseline.
 - **Known limitations.** A device running an upstream build of Skills Manager keeps these files but its updates do not touch them, so in a mixed group of devices a baseline can go stale. When an existing library first connects to a remote by clone, the remote's metadata folder replaces the local one and local baselines are dropped; those skills read `baseline: null` until rebuilt. After a library sync conflict is resolved, the baseline follows the kept content, or is dropped when that cannot be determined.
 
+## Borrowed skills: watched upstreams and fork
+
+For a skill that will never merge with a source again — a rewrite, or the
+user's own skill that borrowed an idea — record where it came from as a
+**watched upstream**. It is only checked for movement: nothing is fetched into
+the library and nothing is merged. It works for skills of any source type and
+does not change the skill's own source.
+
+```bash
+# Watch a location. Without --revision, its current head counts as already seen.
+"$SM" --json skills watch add <skill> --git-url owner/repo --subpath skills/x --note "lifted the retry loop"
+"$SM" --json skills watch add <skill> --git-url https://github.com/o/r/tree/main/skills/x --revision <sha>
+
+# List: `moved` per entry, as of the last check. --check resolves the remotes first.
+"$SM" --json skills watch list <skill> --check
+
+# "I have looked": the upstream's current revision becomes the seen one; moved clears.
+"$SM" --json skills watch seen <skill> <watch-id>
+"$SM" --json skills watch remove <skill> <watch-id>
+
+# Copy a library skill into a new local skill that watches the original's git source
+"$SM" --json skills fork <skill> --as <new-name>
+```
+
+- `skills check` carries `watched_moved` for every skill (and a `watched` list
+  when it watches something), whatever its source type, so one
+  `skills check --all` covers both updates and borrowed sources.
+- With `--subpath`, only commits that change that directory count as movement.
+  An upstream that can't be reached is reported in `check_error` on its entry;
+  the rest of the check goes on.
+- `fork` refuses a name that is already taken. The new skill is `local` with no
+  source folder, no tags, no preset membership and no deployments; the original
+  is untouched. Its content is copied byte for byte except the `name:` line of
+  the `SKILL.md` frontmatter, which becomes the new name (the library names a
+  skill after that line). The watch starts at the revision the original's
+  content came from (its baseline, else `source_revision`); when neither is
+  known it starts unseen and the first check reports it as moved. A local,
+  imported or website original has no git source, so its fork watches nothing.
+- Watches live in `.skills-manager/fork-watch.<skill_id>.json` and travel with
+  the library through Git backup; nothing is written inside a skill folder.
+  When two devices change the same skill's watches at once, the later commit
+  wins. Deleting the skill deletes its watches.
+
 ## Tag
 
 ```bash

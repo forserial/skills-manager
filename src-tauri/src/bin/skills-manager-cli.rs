@@ -11,6 +11,7 @@ use app_lib::core::{
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
     well_known,
 };
+use app_lib::core::watched_upstreams;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
@@ -202,6 +203,17 @@ enum SkillsCommand {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Git locations a skill borrowed from: checked for movement, never merged.
+    Watch(WatchArgs),
+    /// Copy a library skill to a new local skill that watches the original's
+    /// git source at its current revision. The original is not touched.
+    Fork {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// Name of the new skill. Refused when a skill of that name exists.
+        #[arg(long = "as", value_name = "NEW_NAME")]
+        new_name: String,
+    },
     /// Re-point an installed skill at a git source in place, keeping its id,
     /// tags, preset membership and deployments.
     SetSource {
@@ -321,6 +333,49 @@ enum TagCommand {
     },
     List {
         reference: Option<String>,
+    },
+}
+
+#[derive(Args, Debug)]
+struct WatchArgs {
+    #[command(subcommand)]
+    command: WatchCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum WatchCommand {
+    /// Watch a git location. Without --revision, its current head counts as seen.
+    Add {
+        reference: String,
+        /// Git URL, owner/repo, a GitHub tree URL, file:// URL or local repository path
+        #[arg(long = "git-url")]
+        git_url: String,
+        /// Directory inside the repository. Only commits that change it count.
+        #[arg(long)]
+        subpath: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        /// Commit to treat as already seen.
+        #[arg(long)]
+        revision: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// List watched upstreams with `moved` per entry (as last checked).
+    List {
+        reference: String,
+        /// Resolve every upstream now before listing.
+        #[arg(long)]
+        check: bool,
+    },
+    Remove {
+        reference: String,
+        id: String,
+    },
+    /// "I have looked": the upstream's current revision becomes the seen one.
+    Seen {
+        reference: String,
+        id: String,
     },
 }
 
@@ -612,6 +667,16 @@ struct CheckReport {
     update_status: String,
     last_check_error: Option<String>,
     skipped: bool,
+    #[serde(flatten)]
+    watched: WatchedCheck,
+}
+
+/// Watched upstreams in `skills check` output (sm-69q.7).
+#[derive(Debug, Default, Serialize)]
+struct WatchedCheck {
+    watched_moved: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    watched: Vec<watched_upstreams::WatchedUpstream>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1014,6 +1079,16 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             let hits = run_search(store, &query, limit)?;
             print_json(&hits, json);
         }
+        SkillsCommand::Watch(args) => run_watch(args, store, json)?,
+        SkillsCommand::Fork {
+            reference,
+            new_name,
+        } => {
+            let skill = resolve_skill(store, &reference)?;
+            let result =
+                watched_upstreams::fork_skill(store, &skill.id, &new_name).map_err(map_app_err)?;
+            print_json(&result, json);
+        }
         SkillsCommand::SetSource {
             reference,
             git_url,
@@ -1109,6 +1184,73 @@ fn print_run_event(event: agent_runner::RunEvent) {
             None => eprintln!("evaluate: agent finished"),
         },
         RunEvent::Failed { .. } => {}
+    }
+}
+
+// ── watched upstreams and fork (sm-69q.7) ────────────────────────────────
+
+fn run_watch(args: WatchArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
+    let proxy_url = store.proxy_url();
+    match args.command {
+        WatchCommand::Add {
+            reference,
+            git_url,
+            subpath,
+            branch,
+            revision,
+            note,
+        } => {
+            let skill = resolve_skill(store, &reference)?;
+            let input = watched_upstreams::NewWatch {
+                git_url,
+                subpath,
+                branch,
+                revision,
+                note,
+            };
+            let added = watched_upstreams::add(store, &skill.id, input, proxy_url.as_deref())
+                .map_err(map_app_err)?;
+            print_json(&added, json);
+        }
+        WatchCommand::List { reference, check } => {
+            let skill = resolve_skill(store, &reference)?;
+            let list = if check {
+                watched_upstreams::check(&skill.id, proxy_url.as_deref())
+            } else {
+                watched_upstreams::list(&skill.id)
+            }
+            .map_err(map_app_err)?;
+            print_json(&list, json);
+        }
+        WatchCommand::Remove { reference, id } => {
+            let skill = resolve_skill(store, &reference)?;
+            let removed =
+                watched_upstreams::remove(store, &skill.id, &id).map_err(map_app_err)?;
+            print_json(&serde_json::json!({"ok": true, "removed": removed}), json);
+        }
+        WatchCommand::Seen { reference, id } => {
+            let skill = resolve_skill(store, &reference)?;
+            let seen = watched_upstreams::mark_seen(store, &skill.id, &id, proxy_url.as_deref())
+                .map_err(map_app_err)?;
+            print_json(&seen, json);
+        }
+    }
+    Ok(())
+}
+
+/// One skill's watched upstreams for `skills check`. A skill without any
+/// reports `watched_moved: false` and no list; a store read failure is
+/// reported the same way rather than failing the whole check.
+fn watched_check(skill_id: &str, proxy_url: Option<&str>) -> WatchedCheck {
+    match watched_upstreams::check(skill_id, proxy_url) {
+        Ok(watched) => WatchedCheck {
+            watched_moved: watched_upstreams::any_moved(&watched),
+            watched,
+        },
+        Err(err) => {
+            eprintln!("check: watched upstreams of {skill_id}: {err}");
+            WatchedCheck::default()
+        }
     }
 }
 
@@ -1973,6 +2115,7 @@ fn run_check(
                 update_status: skill.update_status.clone(),
                 last_check_error: skill.last_check_error.clone(),
                 skipped: true,
+                watched: WatchedCheck::default(),
             });
             continue;
         }
@@ -1988,6 +2131,7 @@ fn run_check(
                     update_status: dto.update_status,
                     last_check_error: dto.last_check_error,
                     skipped: false,
+                    watched: WatchedCheck::default(),
                 },
                 Err(e) => CheckReport {
                     skill_id: skill.id.clone(),
@@ -1996,9 +2140,15 @@ fn run_check(
                     update_status: "error".to_string(),
                     last_check_error: Some(e.message.clone()),
                     skipped: false,
+                    watched: WatchedCheck::default(),
                 },
             };
         reports.push(report);
+    }
+
+    // Watched upstreams are checked for every skill, whatever its source type.
+    for report in &mut reports {
+        report.watched = watched_check(&report.skill_id, proxy_url.as_deref());
     }
 
     Ok(reports)
@@ -3601,6 +3751,76 @@ mod tests {
                 command: SkillsCommand::Evaluations { reference }
             }) if reference == "browser"
         ));
+    }
+
+    #[test]
+    fn parses_the_watch_and_fork_commands() {
+        let parse = |args: &[&str]| {
+            let mut full = vec!["skills-manager-cli", "skills"];
+            full.extend_from_slice(args);
+            match Cli::try_parse_from(full).unwrap().command {
+                Commands::Skills(SkillsArgs { command }) => command,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(matches!(
+            parse(&[
+                "watch", "add", "mine", "--git-url", "owner/repo", "--subpath", "skills/x",
+                "--branch", "dev", "--revision", "abc123", "--note", "lifted retry",
+            ]),
+            SkillsCommand::Watch(WatchArgs {
+                command: WatchCommand::Add {
+                    reference, git_url, subpath: Some(subpath), branch: Some(branch),
+                    revision: Some(revision), note: Some(note),
+                }
+            }) if reference == "mine" && git_url == "owner/repo" && subpath == "skills/x"
+                && branch == "dev" && revision == "abc123" && note == "lifted retry"
+        ));
+        assert!(matches!(
+            parse(&["watch", "list", "mine", "--check"]),
+            SkillsCommand::Watch(WatchArgs {
+                command: WatchCommand::List { reference, check: true }
+            }) if reference == "mine"
+        ));
+        assert!(matches!(
+            parse(&["watch", "remove", "mine", "ab12cd34"]),
+            SkillsCommand::Watch(WatchArgs {
+                command: WatchCommand::Remove { reference, id }
+            }) if reference == "mine" && id == "ab12cd34"
+        ));
+        assert!(matches!(
+            parse(&["watch", "seen", "mine", "ab12cd34"]),
+            SkillsCommand::Watch(WatchArgs {
+                command: WatchCommand::Seen { reference, id }
+            }) if reference == "mine" && id == "ab12cd34"
+        ));
+        assert!(matches!(
+            parse(&["fork", "theirs", "--as", "mine"]),
+            SkillsCommand::Fork { reference, new_name }
+                if reference == "theirs" && new_name == "mine"
+        ));
+        assert!(
+            Cli::try_parse_from(["skills-manager-cli", "skills", "fork", "theirs"]).is_err(),
+            "--as is required"
+        );
+    }
+
+    /// `skills check --json` carries `watched_moved` for every skill, and the
+    /// list only when the skill watches something.
+    #[test]
+    fn check_reports_carry_watched_moved() {
+        let report = CheckReport {
+            skill_id: "s".to_string(),
+            name: "s".to_string(),
+            source_type: "local".to_string(),
+            update_status: "local_only".to_string(),
+            last_check_error: None,
+            skipped: false,
+            watched: WatchedCheck::default(),
+        };
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["watched_moved"], false);
+        assert!(value.get("watched").is_none());
     }
 
     #[test]

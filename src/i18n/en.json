@@ -1132,6 +1132,31 @@
       "deleteLocalBatchFailed": "{{count}} local skills failed to delete"
     }
   },
+  "borrowed": {
+    "title": "Borrowed from",
+    "check": "Check",
+    "moved": "Moved",
+    "movedCount_one": "{{count}} moved",
+    "movedCount_other": "{{count}} moved",
+    "unchanged": "Unchanged",
+    "lastSeen": "Last seen",
+    "unknown": "unknown",
+    "checkFailed": "Could not check",
+    "open": "Open",
+    "markSeen": "Mark as seen",
+    "markedSeen": "Marked as seen"
+  },
+  "fork": {
+    "menu": "Fork",
+    "title": "Fork {{name}}",
+    "description": "Copies this skill into a new local skill you can change freely. The new skill watches the original's source, so you are told when it moves. The original is not changed.",
+    "nameLabel": "New skill name",
+    "nameTaken": "A skill with this name already exists.",
+    "confirm": "Fork",
+    "done": "Forked as {{name}}",
+    "doneWatching": "It watches the original's source.",
+    "doneNoSource": "The original has no git source, so nothing is watched."
+  },
   "evaluation": {
     "title": "Evaluation",
     "expand": "Show",
