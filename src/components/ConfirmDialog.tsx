@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { X, AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -7,6 +7,8 @@ interface Props {
   title?: string;
   message: string;
   details?: string[];
+  /** Extra content between the details and the buttons. */
+  children?: ReactNode;
   confirmLabel?: string;
   tone?: "danger" | "warning";
   /** Keep the dialog up while the confirmed action runs (closing would not
@@ -21,6 +23,7 @@ export function ConfirmDialog({
   title,
   message,
   details,
+  children,
   confirmLabel,
   tone = "danger",
   lockWhileRunning = false,
@@ -88,6 +91,7 @@ export function ConfirmDialog({
             ))}
           </div>
         ) : null}
+        {children}
 
         <div className="flex justify-end gap-2">
           <button

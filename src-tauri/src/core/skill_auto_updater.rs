@@ -204,13 +204,14 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Result<RoundCounts, Stri
         }
         if apply {
             match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
-                Ok(result) if !result.pending_removals.is_empty() => {
+                Ok(result) if result.is_held() => {
                     held_back += 1;
                     log::info!(
                         "skill auto-updater: holding back {skill_id} — updating would remove {} \
                          path(s) the new version does not have; update it by hand to review",
                         result.pending_removals.len()
                     );
+                    crate::core::baseline::log_held_overwrites(&skill_id, &result); // sm-69q.4
                 }
                 Ok(_) => updated += 1,
                 Err(err) => {
@@ -226,7 +227,7 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Result<RoundCounts, Stri
     log::info!(
         "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} pinned={pinned} failed={failed}"
     );
-    Ok(RoundCounts { updated, pinned })
+    Ok(RoundCounts { updated, pinned, held_back })
 }
 
 /// What a round did, for tests (sm-69q.5). The log line has the rest.
@@ -234,6 +235,8 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Result<RoundCounts, Stri
 pub(crate) struct RoundCounts {
     pub updated: usize,
     pub pinned: usize,
+    /// Held for approval: removals or overwrites (sm-69q.4).
+    pub held_back: usize,
 }
 
 #[cfg(test)]

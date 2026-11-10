@@ -458,7 +458,7 @@
       "clickToRemove": "点击标记为移除",
       "undoRemove": "点击保留此标签"
     },
-    "batchHeldBack": "有 {{count}} 个 skill 未更新——更新会删除文件（{{names}}）。逐个更新可以看到具体是哪些。",
+    "batchHeldBack": "有 {{count}} 个 skill 未更新——更新会删除文件或覆盖你的本地修改（{{names}}）。逐个更新可以看到具体是哪些。",
     "batchSyncAgents": "同步到 Agent ({{count}})",
     "batchSynced": "已同步 {{count}} 项到 Agent",
     "batchSyncFailed": "{{count}} 项同步失败",
@@ -1191,6 +1191,18 @@
     "done": "已派生为 {{name}}",
     "doneWatching": "它会关注原技能的来源。",
     "doneNoSource": "原技能没有 git 来源，因此不会关注任何来源。"
+  },
+  "heldUpdate": {
+    "title": "此更新会覆盖你的修改",
+    "message": "更新 {{name}} 会用上游版本替换你在库中修改过的 {{count}} 个文件，你对这些文件的修改将会丢失。目前还没有任何改动。若要保留你的版本，请取消；若要留一份副本，请先把它保存到技能文件夹之外。",
+    "overwritesGroup": "你的修改将被替换（{{count}}）",
+    "removalsGroup": "将被删除（{{count}}）",
+    "confirm": "覆盖我的修改并更新",
+    "reason": {
+      "baseline_not_backfilled": "Skills Manager 还没有记录上游为此技能发布的内容，因此无法区分你的修改和上游的改动，更新会改动的每个文件都已列出。运行 \"skills baseline rebuild\" 后，只会列出你真正修改过的文件。",
+      "baseline_unrecoverable": "Skills Manager 没有记录上游为此技能发布的内容，而且该版本在上游已不存在，无法重建，更新会改动的每个文件都已列出。更新将一次性采用上游版本；取消则保留你的版本。",
+      "baseline_suspect": "此技能的库同步冲突尚未解决，上游内容的记录可能属于另一台设备，更新会改动的每个文件都已列出。请先解决同步冲突，才能只看到你自己的修改。"
+    }
   },
   "evaluation": {
     "title": "评估",

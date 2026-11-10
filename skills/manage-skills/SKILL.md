@@ -144,7 +144,21 @@ Each result has `install_ref` (paste straight into `skills install`), `installs`
 
 The field is omitted entirely when nothing is held back, so test for its presence rather than for an empty array. `refreshed: false` *with* `held_back_removals` is **not a failure and not something to retry** — the skill is untouched and still on its old version. Show the user the listed paths and ask. There is no CLI flag to override this; only the desktop app can confirm and proceed, because only a person can say those files are expendable. The paths are prefixed with where they live (`library`, or an agent key for a deployed copy).
 
-Note what this does *not* cover: a file the user edited that the new version also ships is reported as surviving, because its path survives — the update overwrites their edits silently. Warn anyone keeping local modifications inside a skill folder.
+### Local edits are not overwritten silently
+
+An edited file is no longer replaced without asking. When an update of a git or skills.sh skill would replace a library file that differs from its baseline (see [Baselines](#baselines)), it applies nothing and reports the files beside any removals:
+
+```jsonc
+{ "name": "ppt-master", "refreshed": false,
+  "held_back_overwrites": ["library: SKILL.md"],
+  "held_back_reason": "local_changes" }
+```
+
+- Handle it exactly like `held_back_removals`: the skill is untouched, it is not an error, don't retry. Both fields are omitted when empty. There is still no CLI flag to approve; the app's update dialog lists the edits in their own group and one confirmation covers both lists.
+- It holds even when upstream changed a *different* file, because the update would otherwise put upstream's old copy of the edited file back. Merging local edits onto the new version comes later. An edit that already matches upstream's new content is not held.
+- `held_back_reason` says why: `local_changes` (the listed files were edited, added or deleted locally), or, when the baseline cannot tell which files the user changed, every file the update would change is listed and the reason is `baseline_not_backfilled` (no baseline yet; `skills baseline rebuild` narrows the list), `baseline_unrecoverable` (no baseline and its revision is gone upstream, so a rebuild cannot help; approving takes upstream's version once) or `baseline_suspect` (a library sync conflict on the skill is pending; resolve it first).
+- `skills update --all`, the app's "update all" and the automatic updater (even with apply on) never approve: such skills are left alone and reported as held back.
+- **Limitation:** a device in the same sync group that runs an upstream build of Skills Manager does not know about baselines, so its updates still overwrite local edits (inferred, not tested).
 
 ## Pin and review
 
@@ -465,7 +479,7 @@ The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are
 "$SM" skills update --all    # apply
 ```
 
-Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks.
+Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks. Skills with `held_back_removals` or `held_back_overwrites` were held for the user's decision; list the paths and say why.
 
 ## Pitfalls
 

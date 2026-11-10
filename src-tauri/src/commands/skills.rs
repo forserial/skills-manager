@@ -39,7 +39,22 @@ pub struct UpdateSkillResult {
     /// approves *that* list against *that* revision and nothing else — if the
     /// remote moves on, or the skill writes another file while the dialog is
     /// open, the approval no longer matches and the user is asked again.
+    /// Since sm-69q.4 it also binds `pending_overwrites`.
     pub removal_approval: Option<String>,
+    /// Library files the update would replace although they were changed
+    /// locally (sm-69q.4). Non-empty means **nothing was changed**, as for
+    /// `pending_removals`; one `removal_approval` answers both lists.
+    pub pending_overwrites: Vec<crate::core::baseline::PendingOverwrite>,
+    /// Why `pending_overwrites` holds: local changes, or a baseline that is
+    /// not yet backfilled, unrecoverable or suspect. `None` when it is empty.
+    pub overwrite_reason: Option<crate::core::baseline::OverwriteReason>,
+}
+
+impl UpdateSkillResult {
+    /// Declined, having changed nothing: there is something to approve.
+    pub fn is_held(&self) -> bool {
+        self.removal_approval.is_some()
+    }
 }
 
 /// Stands in for a revision when binding a re-import's approval: there is no
@@ -77,6 +92,8 @@ enum UpdateOutcome {
     Held {
         pending: Vec<PendingRemoval>,
         approval: String,
+        /// Local edits it would replace (sm-69q.4).
+        overwrites: crate::core::baseline::OverwriteCheck,
     },
 }
 
@@ -143,6 +160,22 @@ fn removal_approval_token(revision: &str, pending: &[PendingRemoval]) -> String 
         hasher.update([0]);
     }
     hex::encode(hasher.finalize())
+}
+
+/// [`removal_approval_token`] over removals and overwrites together, so one
+/// approval answers one exact pair of lists (sm-69q.4). With no overwrites it
+/// is exactly the removal token.
+fn held_approval_token(
+    revision: &str,
+    pending: &[PendingRemoval],
+    overwrites: &[crate::core::baseline::PendingOverwrite],
+) -> String {
+    let mut rows = pending.to_vec();
+    rows.extend(overwrites.iter().map(|o| PendingRemoval {
+        location: format!("overwrite:{}", o.location),
+        path: o.path.clone(),
+    }));
+    removal_approval_token(revision, &rows)
 }
 
 /// Removes a staged directory unless the swap claimed it.
@@ -1859,10 +1892,12 @@ pub async fn batch_update_skills(
                         update_git_skill_internal(&store, &skill_id, proxy_url.as_deref(), None, None);
                     log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
                     match outcome {
-                        Ok(result) if !result.pending_removals.is_empty() => {
+                        Ok(result) if result.is_held() => {
                             // Held back rather than applied: it would have taken
-                            // away files the new version does not have, and a
-                            // batch has nobody to ask.
+                            // away files the new version does not have, or
+                            // replaced local edits (sm-69q.4), and a batch has
+                            // nobody to ask.
+                            crate::core::baseline::log_held_overwrites(&skill_id, &result);
                             held_back.push(skill.name.clone());
                         }
                         Ok(result) => {
@@ -2218,6 +2253,13 @@ pub fn update_git_skill_internal(
         let staged_guard = StagedPathGuard::new(&staged_path, install_result.is_some());
 
         let pending = pending_removals_for(store, &skill, install_result.is_some().then_some(staged_path.as_path()))?;
+        // sm-69q.4: local edits the swap would replace. Nothing is replaced
+        // when nothing was staged, so there is nothing to compare then.
+        let overwrites = match install_result {
+            Some(_) => crate::core::baseline::pending_overwrites(store, &skill, &staged_path)
+                .map_err(AppError::internal)?,
+            None => Default::default(),
+        };
 
         // A confirmation answers one exact question: this revision, this list
         // as shown. It closes the window while the dialog is open — a push, or
@@ -2228,8 +2270,8 @@ pub fn update_git_skill_internal(
         // Skills Manager, not the agent processes writing into these very
         // directories. Narrowing that further needs the directories frozen
         // before the scan, not another scan.
-        let approval = removal_approval_token(&remote_revision, &pending);
-        if !pending.is_empty() && approved_removals != Some(approval.as_str()) {
+        let approval = held_approval_token(&remote_revision, &pending, &overwrites.files);
+        if (!pending.is_empty() || !overwrites.is_empty()) && approved_removals != Some(approval.as_str()) {
             // Declining is not a failure: nothing was touched and the update is
             // still waiting. Clear the `updating` marker here, inside the lock,
             // rather than after releasing it — doing it later lets a concurrent
@@ -2243,7 +2285,7 @@ pub fn update_git_skill_internal(
                     None,
                 )
                 .map_err(AppError::db)?;
-            return Ok(UpdateOutcome::Held { pending, approval });
+            return Ok(UpdateOutcome::Held { pending, approval, overwrites });
         }
 
         if let Some(install_result) = install_result {
@@ -2297,16 +2339,20 @@ pub fn update_git_skill_internal(
 
     match update_result {
         Ok(outcome) => {
-            let (content_changed, pending_removals, removal_approval) = match outcome {
-                UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None),
-                UpdateOutcome::Held { pending, approval } => (false, pending, Some(approval)),
+            let (content_changed, pending_removals, removal_approval, mut overwrites) = match outcome {
+                UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None, Default::default()),
+                UpdateOutcome::Held { pending, approval, overwrites } => (false, pending, Some(approval), overwrites),
             };
+            // Off the lock: may probe upstream for the baseline's revision.
+            crate::core::baseline::refine_unknown_reason(&mut overwrites, &skill, proxy_url);
             let skill = managed_skill_by_id(store, skill_id)?;
             Ok(UpdateSkillResult {
                 skill,
                 content_changed,
                 pending_removals,
                 removal_approval,
+                pending_overwrites: overwrites.files,
+                overwrite_reason: overwrites.reason,
             })
         }
         Err(e) => {
@@ -3830,6 +3876,38 @@ mod tests {
             removal_approval_token("rev1", &a),
             removal_approval_token("rev1", &b),
             "the skill wrote another file while the dialog was open"
+        );
+    }
+
+    /// sm-69q.4: one approval binds removals and overwrites together, and an
+    /// overwrite is never mistaken for a removal of the same path.
+    #[test]
+    fn a_held_approval_binds_overwrites_too() {
+        let removals = vec![PendingRemoval {
+            location: LIBRARY_LOCATION.to_string(),
+            path: "old.md".to_string(),
+        }];
+        let overwrite = |path: &str| crate::core::baseline::PendingOverwrite {
+            location: LIBRARY_LOCATION.to_string(),
+            path: path.to_string(),
+            local: None,
+        };
+        assert_eq!(
+            held_approval_token("rev1", &removals, &[]),
+            removal_approval_token("rev1", &removals),
+            "no overwrites: an existing removal approval still matches"
+        );
+        let one = held_approval_token("rev1", &removals, &[overwrite("SKILL.md")]);
+        assert_ne!(one, removal_approval_token("rev1", &removals));
+        assert_ne!(one, held_approval_token("rev2", &removals, &[overwrite("SKILL.md")]));
+        assert_ne!(
+            one,
+            held_approval_token("rev1", &removals, &[overwrite("SKILL.md"), overwrite("b.md")])
+        );
+        assert_ne!(
+            held_approval_token("rev1", &[], &[overwrite("old.md")]),
+            removal_approval_token("rev1", &removals),
+            "an overwrite of a path is a different question from its removal"
         );
     }
 

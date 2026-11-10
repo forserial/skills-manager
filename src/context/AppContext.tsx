@@ -380,7 +380,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 );
               }
               // Held back rather than applied: updating would have removed
-              // files the new version does not have, and nobody was here to ask.
+              // files the new version does not have, or replaced local edits
+              // (sm-69q.4), and nobody was here to ask.
               if (result.held_back.length > 0) {
                 toast.warning(
                   i18n.t("mySkills.batchHeldBack", {

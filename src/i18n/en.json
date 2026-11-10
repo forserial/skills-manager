@@ -458,7 +458,7 @@
       "clickToRemove": "Click to mark for removal",
       "undoRemove": "Click to keep this tag"
     },
-    "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove files ({{names}}). Update them one at a time to see what.",
+    "batchHeldBack": "{{count}} skill(s) were left alone — updating them would remove files or replace your local edits ({{names}}). Update them one at a time to see what.",
     "batchSyncAgents": "Sync to agents ({{count}})",
     "batchSynced": "Synced {{count}} skill targets",
     "batchSyncFailed": "{{count}} targets failed to sync",
@@ -1194,6 +1194,18 @@
     "done": "Forked as {{name}}",
     "doneWatching": "It watches the original's source.",
     "doneNoSource": "The original has no git source, so nothing is watched."
+  },
+  "heldUpdate": {
+    "title": "This update would replace your edits",
+    "message": "Updating {{name}} would replace {{count}} file(s) you changed in the library with upstream's version, and your edits to them would be lost. Nothing has changed yet. To keep your version, cancel; to keep a copy, save it outside the skill folder first.",
+    "overwritesGroup": "Your edits would be replaced ({{count}})",
+    "removalsGroup": "Would be removed ({{count}})",
+    "confirm": "Replace my edits and update",
+    "reason": {
+      "baseline_not_backfilled": "Skills Manager has no record of what upstream shipped for this skill yet, so it cannot tell your edits from upstream's changes. Every file the update would change is listed. Running \"skills baseline rebuild\" narrows this to the files you really changed.",
+      "baseline_unrecoverable": "Skills Manager has no record of what upstream shipped for this skill, and that version is gone upstream, so it cannot be rebuilt. Every file the update would change is listed. Updating takes upstream's version once; cancelling keeps yours.",
+      "baseline_suspect": "A library sync conflict on this skill is still pending, so the record of what upstream shipped may belong to another device. Every file the update would change is listed. Resolve the sync conflict first to see only your own edits."
+    }
   },
   "evaluation": {
     "title": "Evaluation",
