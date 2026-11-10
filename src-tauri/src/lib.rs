@@ -1046,6 +1046,10 @@ pub fn run() {
             commands::change_notes::get_skill_change_notes,
             commands::change_notes::set_skill_change_note,
             commands::change_notes::export_skill_local_patch,
+            commands::skill_update_merge::get_skill_merge,
+            commands::skill_update_merge::resolve_skill_merge,
+            commands::skill_update_merge::abort_skill_merge,
+            commands::skill_update_merge::reveal_skill_merge_versions,
             // Pins and upstream commits (fork, sm-69q.5)
             commands::pinning::get_skill_pin,
             commands::pinning::pin_skill,
