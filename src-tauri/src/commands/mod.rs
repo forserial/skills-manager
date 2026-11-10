@@ -4,6 +4,7 @@ pub mod browse;
 pub mod change_notes;
 pub mod evaluation;
 pub mod git_backup;
+pub mod orphaned_folders; // sm-69q.16
 pub mod projects;
 pub mod pinning;
 pub mod scan;

@@ -1041,6 +1041,8 @@ pub fn run() {
             commands::watched_upstreams::add_watched_upstream, // sm-69q.13
             commands::watched_upstreams::remove_watched_upstream,
             commands::watched_upstreams::get_watched_upstream_markers,
+            commands::orphaned_folders::get_orphaned_folders, // sm-69q.16
+            commands::orphaned_folders::adopt_orphaned_folder,
             // Local changes against the baseline (fork, sm-69q.3)
             commands::baseline::get_skill_local_changes,
             commands::baseline::get_local_change_markers,

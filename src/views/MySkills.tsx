@@ -55,6 +55,7 @@ import { useLocalChangeMarkers } from "../hooks/useLocalChangeMarkers";
 import { LocalChangeMarker } from "../components/LocalChangeMarker";
 import { useWatchedUpstreamMarkers } from "../hooks/useWatchedUpstreamMarkers"; // sm-69q.13
 import { WatchedUpstreamMarker } from "../components/WatchedUpstreamMarker";
+import { OrphanedFoldersNotice } from "../components/OrphanedFoldersNotice"; // sm-69q.16
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -1249,6 +1250,8 @@ export function MySkills() {
         </h1>
 
       </div>
+
+      <OrphanedFoldersNotice skills={skills} onAdopted={refreshManagedSkills} />
 
       <div className="app-toolbar">
         <div className="flex flex-1 items-center gap-3">

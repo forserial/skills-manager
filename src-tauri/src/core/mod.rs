@@ -27,6 +27,7 @@ pub mod installer;
 pub mod log_sanitize;
 pub mod merge;
 pub mod migrations;
+pub mod orphaned_folders; // sm-69q.16
 pub mod panic_log;
 pub mod path_guard;
 pub mod pinning;
