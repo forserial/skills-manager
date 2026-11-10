@@ -42,6 +42,7 @@ metadata, migrates data, or touches release and CI. In practice, any change to:
 | `core/watched_upstreams.rs` | `fork` writes a new skill: it must leave the original untouched and give the copy its own name, since an exact copy made the original's reference ambiguous; network checks must stay off the repo lock (sm-69q.7) |
 | `core/change_notes.rs` | A note must follow its path and drop only when the file matches the baseline again, and an exported patch must apply to the baseline revision (sm-69q.8) |
 | `core/skill_update_merge/` | Decides every file of a merging update. A wrong row in the per-file plan, rename following, or CRLF handling loses an edit or keeps stale upstream content without a word; nothing may reach the library until the whole merge is clean, and unattended callers must never merge (sm-69q.6) |
+| `core/clone_metadata_carry.rs` | Merges the local `.skills-manager/` into a fresh clone, file by file, before any reindex. A record carried for a folder the clone already has a record for gives that folder two records; a record not carried orphans its skill; a write outside the clone breaks the clone's rollback (sm-69q.15) |
 | `core/tool_adapters.rs`, when it **changes** an existing adapter's paths | Retargeting removes the old deployments; several adapters can share one directory |
 | `.github/workflows/**`, `scripts/prepare-release.mjs`, `src-tauri/tauri.conf.json`, dependency manifests | Release assets: the Homebrew cask and the Scoop Extras manifest fetch assets by name, and `productName` fixes those names; supply chain |
 
