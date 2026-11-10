@@ -1135,7 +1135,7 @@ pub(crate) fn reconcile_skills_index_unlocked(store: &SkillStore) -> anyhow::Res
         .min_depth(1)
         .max_depth(6)
         .into_iter()
-        .filter_entry(|e| e.file_name().to_string_lossy() != ".git")
+        .filter_entry(|e| e.file_name().to_string_lossy() != ".git" && !crate::core::swap_leftovers::is_leftover_name(e.file_name())) // sm-69q.23
         .flatten()
     {
         let path = entry.path().to_path_buf();

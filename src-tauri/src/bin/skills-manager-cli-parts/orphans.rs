@@ -232,4 +232,67 @@ mod tests {
         assert_eq!(listed.as_array().unwrap().len(), 1, "{listed}");
         assert_eq!(files(&orphan), before);
     }
+
+    /// sm-69q.23, through the CLI's real startup in a child process.
+    #[test]
+    fn a_crash_between_the_swap_renames_is_undone_at_the_next_start() {
+        let root = tempdir().unwrap();
+        let name = format!(
+            "{}::probe_crash_between_the_swap_renames",
+            module_path!().split_once("::").unwrap().1
+        );
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--ignored", "--nocapture", "--test-threads=1"])
+            .env(PROBE_ENV, root.path())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "probe: run by a_crash_between_the_swap_renames_is_undone_at_the_next_start"]
+    fn probe_crash_between_the_swap_renames() {
+        let Some(root) = std::env::var_os(PROBE_ENV).map(PathBuf::from) else {
+            return;
+        };
+        let skills = root.join("skills");
+        fs::create_dir_all(&skills).unwrap();
+        let store = open_library(&root);
+        let source = root.join("src/managed");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "---\nname: managed\n---\nbody\n").unwrap();
+        install_local_action(&store, &source.to_string_lossy(), None, None).unwrap();
+        let id = resolve_skill(&store, "managed").unwrap().id;
+        let folder = skills.join("managed");
+        let before = files(&folder);
+
+        // What a process killed between swap_skill_directory's two renames
+        // leaves (the lib test `an_update_that_crashed_between_the_renames_...`
+        // makes this state through the real swap): the old copy set aside, the
+        // new one staged, nothing at the skill's path.
+        drop(store);
+        let backup = skills.join(format!(".managed.backup-{}", uuid::Uuid::new_v4()));
+        let staged_name = format!(".managed.staged-{}", uuid::Uuid::new_v4());
+        fs::rename(&folder, &backup).unwrap();
+        fs::create_dir_all(skills.join(&staged_name)).unwrap();
+        fs::write(skills.join(&staged_name).join("SKILL.md"), "---\nname: managed\n---\nnew\n").unwrap();
+
+        let store = open_library(&root);
+        let skill = resolve_skill(&store, "managed").expect("the record survives the start");
+        assert_eq!(skill.id, id);
+        assert_eq!(files(&folder), before, "the old copy is back where it was");
+        assert!(!backup.exists());
+        let listed: Value = serde_json::to_value(list_orphans(&store).unwrap()).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed[0]["dir_name"], staged_name.as_str());
+        assert_eq!(listed[0]["kind"], "staged");
+        assert!(listed[0]["note"].as_str().unwrap().contains("may still be in use"));
+        let refused = adopt_orphans(&store, Some(&staged_name), false).unwrap_err();
+        assert!(refused.to_string().contains("not a skill to adopt"), "{refused:#}");
+    }
 }

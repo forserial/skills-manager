@@ -554,6 +554,16 @@ file was lost. `skills orphans` finds them; it only reads.
   same rule the startup reindex uses, so the name sticks.
 - This is not `skills adopt`: that copies skills in from agent directories;
   `orphans adopt` registers a folder already in the library, where it is.
+- Each entry has a `kind`. `unmanaged` is the folder above. `staged`
+  (`.X.staged-<uuid>`) and `backup` (`.X.backup-<uuid>`) are hidden copies an
+  interrupted install or update left, with a `note` saying what to do; they are
+  never adopted. Every start of the app or CLI first puts the only backup of a
+  missing skill that has a record back as `X` (so the record survives), and
+  removes staged folders and backups beside a live `X` once nothing in them
+  has changed for an hour. Listed are the ones it would not decide: still
+  recent, several backups of one missing skill, a backup no record names, or a
+  folder it could not move or remove (a locked file). Never pick between
+  several backups for the user: show them and let them say which is current.
 
 **Say plainly what cannot be recovered.** The adopted skill gets a new id. The
 folder's old id, source, baseline, pin, change notes and watched upstreams are

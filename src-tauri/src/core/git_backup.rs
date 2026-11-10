@@ -1761,6 +1761,7 @@ fn ensure_gitignore(skills_dir: &Path) -> Result<()> {
         "Thumbs.db",
         "*.tmp",
         ".skills-manager.lock",
+        "/.*.staged-*/", "/.*.backup-*/", // sm-69q.23: an install's or update's hidden copies
         PYTHON_ARTIFACT_IGNORES[0],
         PYTHON_ARTIFACT_IGNORES[1],
     ];

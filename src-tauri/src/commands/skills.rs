@@ -3438,6 +3438,7 @@ pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(
     if current_path.exists() {
         std::fs::rename(current_path, &backup_path)?;
     }
+    crate::core::fail_points::crash("swap.between_renames"); // sm-69q.23
 
     let placed = crate::core::fail_points::hit("swap.rename")
         .and_then(|()| std::fs::rename(staged_path, current_path));

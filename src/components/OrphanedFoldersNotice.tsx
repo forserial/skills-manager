@@ -144,14 +144,27 @@ export function OrphanedFoldersNotice({ skills, onAdopted }: Props) {
                       {folder.modified
                         ? ` · ${new Date(folder.modified).toLocaleString()}`
                         : ""}
-                      {folder.has_skill_md ? "" : ` · ${t("orphanedFolders.noSkillMd")}`}
+                      {folder.kind === "unmanaged" && !folder.has_skill_md
+                        ? ` · ${t("orphanedFolders.noSkillMd")}`
+                        : ""}
                     </p>
+                    {folder.kind !== "unmanaged" ? (
+                      <p data-testid="orphaned-folder-leftover" className="text-[12px] text-tertiary">
+                        {t(`orphanedFolders.${folder.kind}`)}
+                      </p>
+                    ) : null}
                   </div>
                   <button
                     type="button"
                     onClick={() => void adopt(folder)}
-                    disabled={!folder.has_skill_md || !!adopting}
-                    title={folder.has_skill_md ? undefined : t("orphanedFolders.noSkillMdHint")}
+                    disabled={folder.kind !== "unmanaged" || !folder.has_skill_md || !!adopting}
+                    title={
+                      folder.kind !== "unmanaged"
+                        ? (folder.note ?? undefined)
+                        : folder.has_skill_md
+                          ? undefined
+                          : t("orphanedFolders.noSkillMdHint")
+                    }
                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-accent-dark hover:bg-accent text-white text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-accent-border outline-none"
                   >
                     {adopting === folder.dir_name ? (
