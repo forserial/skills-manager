@@ -1145,6 +1145,22 @@
     "markSeen": "标记为已查看",
     "markedSeen": "已标记为已查看"
   },
+  "localChanges": {
+    "title": "你的改动",
+    "showDiff": "查看差异",
+    "hideDiff": "隐藏差异",
+    "diffUnavailable": "无法获取基线内容，仅列出改动的文件。",
+    "state": {
+      "modified": "已修改",
+      "added": "新增",
+      "deleted": "已删除"
+    },
+    "markerChanged": "已改动",
+    "markerChangedTitle_other": "{{count}} 个文件与上游原始版本不同",
+    "markerUnknown": "基线未知",
+    "unknownHint": "没有该技能上游原始版本的记录，无法区分你的改动。",
+    "suspectHint": "该技能有待解决的库同步冲突，其上游原始版本记录可能不准确。请先解决冲突。"
+  },
   "fork": {
     "menu": "派生",
     "title": "派生 {{name}}",

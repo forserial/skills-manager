@@ -895,6 +895,10 @@ impl TreeNode {
     }
 }
 
+// Local-change detection (sm-69q.3).
+mod local_changes;
+pub use local_changes::*;
+
 #[cfg(test)]
 mod tests;
 

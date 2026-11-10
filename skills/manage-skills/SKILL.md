@@ -270,6 +270,30 @@ is unknown. Recording it changes no update behaviour yet.
 - Baselines live in `.skills-manager/fork-baseline.<skill_id>.json` and sync with the library. Never edit or delete them by hand; removing a skill removes its baseline.
 - **Known limitations.** A device running an upstream build of Skills Manager keeps these files but its updates do not touch them, so in a mixed group of devices a baseline can go stale. When an existing library first connects to a remote by clone, the remote's metadata folder replaces the local one and local baselines are dropped; those skills read `baseline: null` until rebuilt. After a library sync conflict is resolved, the baseline follows the kept content, or is dropped when that cannot be determined.
 
+### Local changes
+
+Against its baseline, every skill reads one of: `clean`, `changed`,
+`baseline_unknown` (a git skill with no baseline yet), `baseline_suspect` (a
+library sync conflict on it is pending, so its baseline may describe the other
+side's content) or `untracked` (a local skill: no upstream, no baseline). Treat
+`baseline_suspect` like `baseline_unknown`. Line-ending differences are never
+a change.
+
+```bash
+# Which files of a skill differ from what upstream shipped
+"$SM" --json skills status <skill>     # local_changes: { state, baseline_revision, files: [{ path, state }] }
+# Only the skills with local edits; every list row gains local_change_count,
+# baseline_known and local_state
+"$SM" --json skills list --modified
+# The library copy against its baseline, file by file
+"$SM" --json skills diff <skill> --local
+```
+
+- File states are `modified`, `added` (not in the baseline) and `deleted` (in the baseline, gone from the library).
+- `local_change_count` is `null` when the baseline is not known: an unknown baseline is not "no changes".
+- `skills diff --local` takes the baseline content from this device's cache, else fetches the baseline revision. When neither works, `entries` is `null` and `files` still lists the changed paths, with the reason in `message`.
+- The app shows the same: a "Your changes" section in the skill's detail panel, an "Edited" marker on its card, and a quieter "Baseline unknown" marker on git skills without a baseline. Edits made on disk show without a restart.
+
 ## Borrowed skills: watched upstreams and fork
 
 For a skill that will never merge with a source again — a rewrite, or the
