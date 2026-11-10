@@ -48,6 +48,7 @@ import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
 import { EvaluationGradeBadge } from "../components/EvaluationGradeBadge";
 import { useEvaluateCardAction } from "../hooks/useEvaluateCardAction";
+import { useForkCardAction } from "../hooks/useForkCardAction";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -171,6 +172,7 @@ export function MySkills() {
     evaluationSummaries,
   } = useApp();
   const evaluateAction = useEvaluateCardAction();
+  const { forkAction, dialog: forkDialog } = useForkCardAction();
   const [viewMode, setViewMode, groupBySource, setGroupBySource] = useSkillViewMode();
   // Grouping is a view preference, so it persists; which groups are open is
   // session state, because a group the user expanded once is not a statement
@@ -1688,6 +1690,7 @@ export function MySkills() {
                                 }]
                               : []),
                             evaluateAction(skill.id),
+                            forkAction(skill),
                             {
                               key: "delete",
                               label: t("common.delete"),
@@ -2031,6 +2034,7 @@ export function MySkills() {
                             }]
                           : []),
                         evaluateAction(skill.id),
+                        forkAction(skill),
                         {
                           key: "delete",
                           label: t("common.delete"),
@@ -2098,6 +2102,7 @@ export function MySkills() {
           }
         }}
       />
+      {forkDialog}
       <ConfirmDialog
         open={batchDeleteConfirm}
         message={t("mySkills.batchDeleteConfirm", { count: selectedIds.size })}

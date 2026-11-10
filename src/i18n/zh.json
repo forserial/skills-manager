@@ -1132,6 +1132,30 @@
       "deleteLocalBatchFailed": "{{count}} 个本地 Skill 删除失败"
     }
   },
+  "borrowed": {
+    "title": "借鉴来源",
+    "check": "检查",
+    "moved": "有更新",
+    "movedCount_other": "{{count}} 个有更新",
+    "unchanged": "未变化",
+    "lastSeen": "上次查看",
+    "unknown": "未知",
+    "checkFailed": "检查失败",
+    "open": "打开",
+    "markSeen": "标记为已查看",
+    "markedSeen": "已标记为已查看"
+  },
+  "fork": {
+    "menu": "派生",
+    "title": "派生 {{name}}",
+    "description": "将此技能复制为一个可自由修改的新本地技能。新技能会关注原技能的来源，来源有更新时会提示你。原技能不会被修改。",
+    "nameLabel": "新技能名称",
+    "nameTaken": "已存在同名技能。",
+    "confirm": "派生",
+    "done": "已派生为 {{name}}",
+    "doneWatching": "它会关注原技能的来源。",
+    "doneNoSource": "原技能没有 git 来源，因此不会关注任何来源。"
+  },
   "evaluation": {
     "title": "评估",
     "expand": "展开",

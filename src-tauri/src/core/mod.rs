@@ -40,4 +40,5 @@ pub mod sync_metadata;
 pub mod timing;
 pub mod tool_adapters;
 pub mod tool_service;
+pub mod watched_upstreams;
 pub mod well_known;
