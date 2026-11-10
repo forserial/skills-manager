@@ -1161,7 +1161,15 @@
     "markerChangedTitle_other": "{{count}} files differ from what upstream shipped",
     "markerUnknown": "Baseline unknown",
     "unknownHint": "There is no record of what upstream shipped for this skill, so your edits cannot be told apart from it.",
-    "suspectHint": "A library sync conflict on this skill is pending, so its record of what upstream shipped may be wrong. Resolve the conflict first."
+    "suspectHint": "A library sync conflict on this skill is pending, so its record of what upstream shipped may be wrong. Resolve the conflict first.",
+    "addNote": "Add a note",
+    "editNote": "Edit note",
+    "notePlaceholder": "Why this file differs, in one line",
+    "noteHint": "Enter saves, Esc cancels. An empty note removes it. A note goes away by itself once the file matches upstream again.",
+    "exportPatch": "Export patch",
+    "exportFilter": "Patch",
+    "exported_one": "Exported {{count}} changed file to {{path}}",
+    "exported_other": "Exported {{count}} changed files to {{path}}"
   },
   "pin": {
     "title": "Pin",

@@ -4,6 +4,7 @@ pub mod audit_log;
 pub mod auto_backup;
 pub mod baseline;
 pub mod central_repo;
+pub mod change_notes;
 pub mod cli_bridge;
 pub mod content_hash;
 pub mod crypto;

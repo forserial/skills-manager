@@ -522,5 +522,28 @@ fn with_fetched_base<T>(
     result
 }
 
+// ── baseline content for other modules (sm-69q.8) ──
+
+/// Hand the baseline content of `skill` to `f` as a directory, got the way
+/// [`local_diff`] gets it: the local base store when it holds the tree, else
+/// a by-SHA fetch of the baseline revision. The error says why neither
+/// worked. `validate_url` is false only in tests (`file://` upstreams).
+pub(crate) fn with_baseline_content<T>(
+    skill: &SkillRecord,
+    baseline: &Baseline,
+    proxy_url: Option<&str>,
+    validate_url: bool,
+    f: impl Fn(&Path) -> Result<T>,
+) -> Result<(BaseSource, T)> {
+    if let Some(tree_id) = baseline.tree_id.as_deref().filter(|t| base_store_has_tree(t)) {
+        match with_exported_tree(tree_id, &f) {
+            Ok(value) => return Ok((BaseSource::BaseStore, value)),
+            Err(err) => log::warn!("base store export for {} failed: {err:#}", skill.id),
+        }
+    }
+    let value = with_fetched_base(skill, baseline, proxy_url, validate_url, &f)?;
+    Ok((BaseSource::Fetch, value))
+}
+
 #[cfg(test)]
 mod tests;

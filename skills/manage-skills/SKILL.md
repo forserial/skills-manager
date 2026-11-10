@@ -338,6 +338,29 @@ a change.
 - `skills diff --local` takes the baseline content from this device's cache, else fetches the baseline revision. When neither works, `entries` is `null` and `files` still lists the changed paths, with the reason in `message`.
 - The app shows the same: a "Your changes" section in the skill's detail panel, an "Edited" marker on its card, and a quieter "Baseline unknown" marker on git skills without a baseline. Edits made on disk show without a restart.
 
+### Change notes and patch export
+
+Each locally changed file can carry a one-line reason ("removed the usage
+ping", "Windows paths"). Notes sync with the library. When the user asks why a
+file was changed, or to record why, use these instead of a side file.
+
+```bash
+# The local changes with state and note: files: [{ path, state, note, note_updated_at }]
+"$SM" --json skills changes <skill>
+# Set a changed file's note (path relative to the skill directory), or clear it
+"$SM" --json skills changes note <skill> refs/a.md "Windows paths"
+"$SM" --json skills changes note <skill> refs/a.md --clear
+# A unified diff of the library copy against the baseline, to stdout or a file
+"$SM" skills changes export <skill> > local.patch
+"$SM" --json skills changes export <skill> --output local.patch   # prints a summary
+```
+
+- Only a file that differs from a known baseline takes a note. On `baseline_unknown` or `baseline_suspect`, `note` is refused and stored notes are kept under `held_notes`.
+- A note is dropped by itself once its file no longer differs from the baseline: the file was reverted, or an update brought upstream level with it. It stays with its path while the file still differs, whatever the baseline revision.
+- The patch covers the changed files only. Its paths start at the upstream repository root (`path_prefix` in the JSON is the skill's directory there), so `git apply local.patch` works at the root of a checkout of the baseline revision (`baseline_revision`). Each note is a `# <path>: <note>` line directly above its file's `diff --git` header. The library side takes the baseline file's line endings, since endings are never a change.
+- Export needs the baseline content: this device's cache, else a fetch of the baseline revision. It fails with a message when neither works, when the baseline is unknown or suspect, or when there is nothing to export. Don't retry a "revision is gone upstream" failure.
+- The app shows the notes in "Your changes": a note button on each file (Enter saves, Esc cancels, empty removes) and an "Export patch" button that asks where to save.
+
 ## Borrowed skills: watched upstreams and fork
 
 For a skill that will never merge with a source again — a rewrite, or the
