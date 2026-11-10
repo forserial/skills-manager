@@ -410,6 +410,10 @@ mod tests {
             report_md: None,
             error: None,
             stale: false,
+            source_revision: None,
+            baseline_revision: None,
+            subject: crate::core::evaluation::EvaluationSubject::Library,
+            upstream_revision: None,
         }
     }
 

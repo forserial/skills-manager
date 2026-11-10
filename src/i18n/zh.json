@@ -1232,6 +1232,20 @@
       "base_unavailable": "两边都修改过；暂时无法获取上游之前的版本"
     }
   },
+  "evaluationRevisions": {
+    "evaluatedAt": "评估于 {{sha}}",
+    "upstreamNow": "上游现已在 {{sha}}",
+    "evaluateUpdate": "评估更新",
+    "evaluateUpdateHint": "在应用之前，评估更新将安装的版本。本地修改会像更新时一样合并进来；技能库不会被修改。",
+    "compareTitle": "更新对比",
+    "current": "当前版本",
+    "currentAt": "当前版本（{{sha}}）",
+    "incoming": "待更新版本",
+    "incomingAt": "待更新版本（{{sha}}）",
+    "noCurrentResult": "当前版本还没有成功的评估。",
+    "notApplied": "待更新结果评估的是更新将安装的版本，更新尚未应用。",
+    "historyIncoming": "更新 {{sha}}"
+  },
   "evaluation": {
     "title": "评估",
     "expand": "展开",

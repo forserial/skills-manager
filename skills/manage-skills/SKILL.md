@@ -540,6 +540,10 @@ Useful organization queries:
 
 Evaluate: `skills evaluate <skill> [--evaluator skill-judge] [--agent claude_code] [--model <m>]` runs a paid agent review (about $1, a few minutes; ask first), and `skills evaluations <skill>` lists stored runs newest first with `stale: true` once the skill changed.
 
+Each run records the upstream revision it judged: `source_revision` (the commit its files came from), `baseline_revision` (the skill's baseline then) and `upstream_revision` (where upstream is now; it differs from `source_revision` once the skill has moved on). `subject` is `library` for the library copy and `incoming` for an update evaluated before applying it.
+
+Evaluate an update before applying it: `skills evaluate <skill> --incoming` judges the version `skills update <skill>` would install (upstream's head, with local changes merged as the update would merge them), staged outside the library and removed afterwards. The library, its git status and the skill's record do not change. It prints the run (the v1 `result`, `subject: "incoming"`, `source_revision` = the incoming commit) plus `incoming` (`revision`, `installed_revision`, `merged`, `kept_local`, `conflicts`: files an update would hold, judged as upstream ships them) and `latest_library`, the newest successful run of the current copy, to compare with. It is a paid run like any other: ask first. The run is kept in `skills evaluations` but never becomes the skill's badge; once the update is applied it stops reading `stale`.
+
 ## Presets
 
 ```bash
