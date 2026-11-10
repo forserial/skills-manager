@@ -9,6 +9,7 @@ pub mod crypto;
 pub mod error;
 pub mod evaluation;
 pub mod file_manager;
+pub mod fork_files;
 pub mod fork_schema;
 pub mod file_watcher;
 pub mod git2_engine;

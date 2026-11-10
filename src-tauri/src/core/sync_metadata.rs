@@ -117,6 +117,7 @@ pub(crate) fn write_all_from_db_unlocked(store: &SkillStore) -> Result<()> {
     write_skill_records_from_db(store)?;
     write_scenario_records_from_db(store)?;
     remove_stale_metadata_files(store)?;
+    super::fork_files::sweep_orphans_unlocked(store)?;
     Ok(())
 }
 
