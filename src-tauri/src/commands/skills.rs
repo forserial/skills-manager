@@ -185,6 +185,8 @@ pub struct BatchUpdateSkillsResult {
     /// version does not have. Named so the user can go and look, rather than
     /// wondering why the badge did not clear.
     pub held_back: Vec<String>,
+    /// Pinned skills, skipped without trying (sm-69q.5).
+    pub pinned: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,6 +224,8 @@ pub struct ManagedSkillDto {
     pub targets: Vec<TargetDto>,
     pub preset_ids: Vec<String>,
     pub tags: Vec<String>,
+    /// Set while the skill is pinned (sm-69q.5).
+    pub pin: Option<crate::core::pinning::PinState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -610,6 +614,20 @@ pub async fn get_skill_source_diff(
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
+        skill_source_diff_internal(&store, skill_id, proxy_url.as_deref())
+    })
+    .await?
+}
+
+/// The library copy against the latest source: what `get_skill_source_diff`
+/// shows in the app and `skills diff --upstream` prints (sm-69q.5).
+pub fn skill_source_diff_internal(
+    store: &SkillStore,
+    skill_id: String,
+    proxy_url: Option<&str>,
+) -> Result<SkillSourceDiffDto, AppError> {
+    // A block, so the body keeps the indentation it had inside the closure.
+    {
         let skill = store
             .get_skill_by_id(&skill_id)
             .map_err(AppError::db)?
@@ -646,7 +664,7 @@ pub async fn get_skill_source_diff(
         let remote_revision = git_fetcher::resolve_remote_revision(
             &git_source.clone_url,
             git_source.branch.as_deref(),
-            proxy_url.as_deref(),
+            proxy_url,
         )
         .map_err(AppError::git)?;
 
@@ -655,7 +673,7 @@ pub async fn get_skill_source_diff(
             git_source.branch.as_deref(),
             git_source.subpath.as_deref(),
             None,
-            proxy_url.as_deref(),
+            proxy_url,
             None,
         )
         .map_err(AppError::classify_git_error)?;
@@ -678,8 +696,7 @@ pub async fn get_skill_source_diff(
 
         git_fetcher::cleanup_temp(&temp_dir);
         result
-    })
-    .await?
+    }
 }
 
 fn read_skill_document_from_dir(dir: &Path) -> Result<(String, String), AppError> {
@@ -1821,6 +1838,7 @@ pub async fn batch_update_skills(
         let mut unchanged = 0usize;
         let mut failed = Vec::new();
         let mut held_back = Vec::new();
+        let mut pinned = Vec::new();
 
         for skill_id in skill_ids {
             let skill = match store.get_skill_by_id(&skill_id).map_err(AppError::db)? {
@@ -1830,6 +1848,10 @@ pub async fn batch_update_skills(
                     continue;
                 }
             };
+            if crate::core::pinning::holds(&skill_id) {
+                pinned.push(skill.name.clone()); // sm-69q.5: skipped, not failed
+                continue;
+            }
 
             match skill.source_type.as_str() {
                 "git" | "skillssh" => {
@@ -1873,6 +1895,7 @@ pub async fn batch_update_skills(
             unchanged,
             failed,
             held_back,
+            pinned,
         })
     })
     .await?
@@ -2061,6 +2084,7 @@ fn managed_skill_to_dto(
         .description
         .filter(|s| !s.trim().is_empty())
         .or(skill.description);
+    let pin = crate::core::pinning::active(&skill.id);
 
     ManagedSkillDto {
         id: skill.id,
@@ -2084,6 +2108,7 @@ fn managed_skill_to_dto(
         targets,
         preset_ids,
         tags,
+        pin,
     }
 }
 
@@ -2127,6 +2152,7 @@ pub fn update_git_skill_internal(
             "Only git-based skills can be updated",
         ));
     }
+    crate::core::pinning::refuse_update_if_pinned(&skill)?; // sm-69q.5
 
     let git_source = git_source_from_skill(&skill)?;
     git_fetcher::validate_git_url(&git_source.clone_url).map_err(AppError::git)?;

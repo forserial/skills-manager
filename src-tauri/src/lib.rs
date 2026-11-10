@@ -1038,6 +1038,11 @@ pub fn run() {
             commands::watched_upstreams::check_watched_upstreams,
             commands::watched_upstreams::mark_watched_upstream_seen,
             commands::watched_upstreams::fork_skill,
+            // Pins and upstream commits (fork, sm-69q.5)
+            commands::pinning::get_skill_pin,
+            commands::pinning::pin_skill,
+            commands::pinning::unpin_skill,
+            commands::pinning::get_skill_upstream_commits,
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
             commands::skills::rename_tag,

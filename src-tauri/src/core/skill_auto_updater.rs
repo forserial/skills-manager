@@ -143,7 +143,7 @@ fn apply_enabled(store: &SkillStore) -> bool {
     )
 }
 
-fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
+pub(crate) fn run_round_blocking(store: &SkillStore) -> Result<RoundCounts, String> {
     let proxy = store.proxy_url();
     let apply = apply_enabled(store);
     let ids: Vec<String> = store
@@ -160,6 +160,7 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // running — is simply skipped; the next scheduled round picks it up.
     let (mut checked, mut available, mut updated, mut held_back, mut failed) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut pinned = 0usize; // sm-69q.5
     for skill_id in ids {
         // Yield the lock to any waiting user-initiated operation before taking
         // it again for the next skill (see FOREGROUND_YIELD).
@@ -197,6 +198,10 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         }
         available += 1;
 
+        if apply && crate::core::pinning::holds(&skill_id) {
+            pinned += 1; // sm-69q.5: checked, never applied
+            continue;
+        }
         if apply {
             match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None, None) {
                 Ok(result) if !result.pending_removals.is_empty() => {
@@ -219,9 +224,16 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
         }
     }
     log::info!(
-        "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} failed={failed}"
+        "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} pinned={pinned} failed={failed}"
     );
-    Ok(())
+    Ok(RoundCounts { updated, pinned })
+}
+
+/// What a round did, for tests (sm-69q.5). The log line has the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RoundCounts {
+    pub updated: usize,
+    pub pinned: usize,
 }
 
 #[cfg(test)]

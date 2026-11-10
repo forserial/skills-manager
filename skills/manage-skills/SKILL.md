@@ -146,6 +146,36 @@ The field is omitted entirely when nothing is held back, so test for its presenc
 
 Note what this does *not* cover: a file the user edited that the new version also ships is reported as surviving, because its path survives — the update overwrites their edits silently. Warn anyone keeping local modifications inside a skill folder.
 
+## Pin and review
+
+**Pin** a git or skills.sh skill to hold it at the revision the user reviewed. A pinned skill is still checked, but nothing moves it: `skills update <skill>` refuses with a message naming `skills unpin`, and `skills update --all`, the app's "update all" and the automatic updater skip it and report it. Pinning is also the safety measure for a skill that was clean when assessed and may not stay so.
+
+```bash
+"$SM" --json skills pin <skill> --note "reviewed 2026-11"   # note is optional
+"$SM" --json skills unpin <skill>
+"$SM" --json skills list --pinned
+```
+
+- `skills status --json` reports `pin: { pinned, revision, pinned_at, note }`, or `null` when not pinned. `pinned_at` is Unix milliseconds.
+- `skills check --json` carries `pinned: true` for a pinned skill. With `update_status: "update_available"` that reads "update available (pinned)": upstream moved, and the skill stays put until unpinned.
+- `skills update --all --json` lists a pinned skill with `pinned: true` and `refreshed: false`. That is not a failure and not something to retry.
+- After `skills unpin`, the next update is an ordinary one.
+- Local and website skills have no upstream revision and cannot be pinned.
+- Pins live in `.skills-manager/fork-pin.<skill_id>.json` and sync with the library; the newest change wins when two devices change the same pin. Never edit them by hand.
+
+Before deciding to move a skill, **review** what an update would bring:
+
+```bash
+# The library copy against the latest source: the same entries as the app's diff view
+"$SM" --json skills diff <skill>                # same as --upstream
+# Upstream commits since the baseline revision that touch the skill's directory
+"$SM" --json skills diff <skill> --commits
+```
+
+- `--upstream` returns `{ revision, entries: [{ relative_path, status, content_kind, original_text, updated_text, ... }] }`. `original_text` is the library copy, `updated_text` the source. `status` is `added`, `removed` or `modified`.
+- `--commits` returns `{ base_revision, base_from, remote_revision, subpath, reachable, message, commits: [{ sha, date, author, subject }], truncated }`, newest first. It starts from the skill's baseline revision (`base_from: "baseline"`), or from its recorded source revision when it has no baseline. It fetches history over the network, blobless, without locking the library.
+- `reachable: false` means the list cannot be made: the base revision is gone upstream, or upstream history was rewritten so it is no longer an ancestor of the head. `message` says which. That is not an error to retry.
+
 ## Remove
 
 ```bash
@@ -411,7 +441,7 @@ The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are
 "$SM" skills update --all    # apply
 ```
 
-Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date.
+Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks.
 
 ## Pitfalls
 

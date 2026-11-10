@@ -1146,6 +1146,27 @@
     "markSeen": "Mark as seen",
     "markedSeen": "Marked as seen"
   },
+  "pin": {
+    "title": "Pin",
+    "pin": "Pin this skill",
+    "unpin": "Unpin this skill",
+    "pinnedAt": "Pinned at {{revision}}",
+    "unknownRevision": "unknown",
+    "updateAvailable": "Update available",
+    "pinnedHint": "Checks still run, but no update moves this skill until you unpin it.",
+    "pinnedHintWithNote": "Checks still run, but no update moves this skill until you unpin it. Note: {{note}}",
+    "unpinnedHint": "Pin to keep this skill at the revision you reviewed. Updates, including automatic ones, skip it.",
+    "pinnedToast": "Pinned {{name}}",
+    "unpinnedToast": "Unpinned {{name}}",
+    "badge": "Update (pinned)",
+    "commits": {
+      "title": "Upstream commits since the baseline",
+      "count_one": "{{count}} commit",
+      "count_other": "{{count}} commits",
+      "none": "No upstream commits touch this skill since its baseline.",
+      "failed": "Could not list upstream commits: {{error}}"
+    }
+  },
   "fork": {
     "menu": "Fork",
     "title": "Fork {{name}}",
