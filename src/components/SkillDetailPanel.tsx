@@ -29,6 +29,8 @@ import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SkillEvaluationSection } from "./SkillEvaluationSection";
 import { SkillBorrowedFromSection } from "./SkillBorrowedFromSection";
 import { SkillLocalChangesSection } from "./SkillLocalChangesSection";
+import { SkillPinSection } from "./SkillPinSection";
+import { SkillUpstreamCommits } from "./SkillUpstreamCommits";
 import { SyncDots } from "./SyncDots";
 
 interface Props {
@@ -337,6 +339,8 @@ function SkillDetailPanelContent({
 
       <SkillBorrowedFromSection skill={skill} />
 
+      <SkillPinSection skill={skill} />
+
       {supportsSourceDiff && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {(["local", "diff", "source"] as const).map((tab) => (
@@ -373,7 +377,12 @@ function SkillDetailPanelContent({
         sourceDiffLoading ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("common.loading")}</div>
         ) : activeSourceDiff ? (
-          <SkillSourceDiffViewer entries={activeSourceDiff.entries} />
+          <>
+            {(skill.source_type === "git" || skill.source_type === "skillssh") && (
+              <SkillUpstreamCommits skillId={skill.id} />
+            )}
+            <SkillSourceDiffViewer entries={activeSourceDiff.entries} />
+          </>
         ) : sourceDiffFailed ? (
           <div className="mt-12 text-center text-[13px] text-muted">{t("mySkills.sourceDiffUnavailable")}</div>
         ) : (

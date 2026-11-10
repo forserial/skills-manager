@@ -1042,6 +1042,11 @@ pub fn run() {
             commands::baseline::get_skill_local_changes,
             commands::baseline::get_local_change_markers,
             commands::baseline::get_skill_local_diff,
+            // Pins and upstream commits (fork, sm-69q.5)
+            commands::pinning::get_skill_pin,
+            commands::pinning::pin_skill,
+            commands::pinning::unpin_skill,
+            commands::pinning::get_skill_upstream_commits,
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
             commands::skills::rename_tag,

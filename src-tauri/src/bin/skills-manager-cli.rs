@@ -12,6 +12,7 @@ use app_lib::core::{
     well_known,
 };
 use app_lib::core::watched_upstreams;
+use app_lib::core::pinning;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
@@ -110,6 +111,9 @@ enum SkillsCommand {
         /// Only skills with local changes against their baseline (sm-69q.3)
         #[arg(long)]
         modified: bool,
+        /// Only pinned skills
+        #[arg(long)]
+        pinned: bool,
     },
     Show {
         reference: String,
@@ -257,13 +261,33 @@ enum SkillsCommand {
     Tag(TagArgs),
     /// Baselines: what upstream shipped at the revision a git skill came from.
     Baseline(BaselineArgs),
-    /// Compare a skill. --local: the library copy against its baseline.
+    /// Hold a git skill at its current revision: no update path moves it
+    /// until it is unpinned. `skills check` still reports what upstream has.
+    Pin {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// Why it is pinned
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Release a pin, so updates apply again.
+    Unpin {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+    },
+    /// Review a skill against its source. With no flag, `--upstream`.
     Diff {
         /// Skill ref (id / name / dir basename / central path)
         reference: String,
         /// The library copy against its baseline: the files changed locally
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["upstream", "commits"])]
         local: bool,
+        /// The library copy against the latest source (the app's diff view)
+        #[arg(long, conflicts_with_all = ["local", "commits"])]
+        upstream: bool,
+        /// Upstream commits since the baseline revision that touch the skill
+        #[arg(long, conflicts_with_all = ["local", "upstream"])]
+        commits: bool,
     },
     /// Evaluate a library skill with an evaluator skill run by an agent CLI.
     /// Progress goes to stderr; the stored evaluation is printed on success.
@@ -561,6 +585,8 @@ struct SkillStatusReport {
     /// Files changed against the baseline (sm-69q.3); null when they could
     /// not be read.
     local_changes: Option<app_lib::core::baseline::LocalChanges>,
+    /// Set while the skill is pinned (sm-69q.5).
+    pin: Option<pinning::PinState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -671,6 +697,9 @@ struct UpdateReport {
     /// "already up to date".
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     held_back_removals: Vec<String>,
+    /// Skipped by `--all` because the skill is pinned (sm-69q.5).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pinned: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -681,6 +710,8 @@ struct CheckReport {
     update_status: String,
     last_check_error: Option<String>,
     skipped: bool,
+    /// The skill is pinned: an available update will not be applied (sm-69q.5).
+    pinned: bool,
     #[serde(flatten)]
     watched: WatchedCheck,
 }
@@ -990,8 +1021,9 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             no_preset,
             source,
             modified,
+            pinned,
         } => {
-            let summaries = list_skills_filtered(
+            let summaries: Vec<SkillSummary> = list_skills_filtered(
                 store,
                 query.as_deref(),
                 &tags,
@@ -1000,7 +1032,10 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
                 untagged,
                 no_preset,
                 source.as_deref(),
-            )?;
+            )?
+            .into_iter()
+            .filter(|skill| !pinned || pinning::holds(&skill.id))
+            .collect();
             print_json(&list_with_local_changes(store, summaries, modified)?, json)
         }
         SkillsCommand::Show { reference } => print_json(&show_skill(store, &reference)?, json),
@@ -1095,6 +1130,22 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             print_json(&hits, json);
         }
         SkillsCommand::Watch(args) => run_watch(args, store, json)?,
+        SkillsCommand::Pin { reference, note } => {
+            let skill = resolve_skill(store, &reference)?;
+            let pin = pinning::pin(store, &skill.id, note.as_deref()).map_err(map_app_err)?;
+            print_json(&PinReport::new(&skill, pin), json);
+        }
+        SkillsCommand::Unpin { reference } => {
+            let skill = resolve_skill(store, &reference)?;
+            let pin = pinning::unpin(store, &skill.id).map_err(map_app_err)?;
+            print_json(&PinReport::new(&skill, pin), json);
+        }
+        SkillsCommand::Diff {
+            reference,
+            local,
+            upstream,
+            commits,
+        } => run_diff(store, &reference, local, upstream, commits, json)?,
         SkillsCommand::Fork {
             reference,
             new_name,
@@ -1141,7 +1192,6 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             )?;
             print_json(&report, json);
         }
-        SkillsCommand::Diff { reference, local } => run_diff(store, &reference, local, json)?,
         SkillsCommand::Tag(args) => run_tag(args, store, json)?,
         SkillsCommand::Baseline(BaselineArgs {
             command: BaselineCommand::Rebuild { reference, all, force },
@@ -1447,6 +1497,7 @@ fn skill_status(store: &SkillStore, reference: &str) -> anyhow::Result<SkillStat
         agents,
         baseline: app_lib::core::baseline::summary_for(&skill.id),
         local_changes: local_changes_report(store, &skill),
+        pin: pinning::active(&skill.id),
     })
 }
 
@@ -1517,15 +1568,6 @@ fn local_changes_report(
             None
         }
     }
-}
-
-/// `skills diff`. Only `--local` is handled here; the other comparisons
-/// arrive with sm-69q.5.
-fn run_diff(store: &SkillStore, reference: &str, local: bool, json: bool) -> anyhow::Result<()> {
-    if local {
-        return run_diff_local(store, reference, json);
-    }
-    bail!("skills diff needs --local on this build: comparing with upstream is not available yet")
 }
 
 /// `skills diff <skill> --local`: the library copy against its baseline.
@@ -1614,9 +1656,10 @@ mod local_changes_tests {
         assert!(matches!(
             cli.command,
             Commands::Skills(SkillsArgs {
-                command: SkillsCommand::Diff { reference, local: true }
+                command: SkillsCommand::Diff { reference, local: true, upstream: false, commits: false }
             }) if reference == "demo"
         ));
+        assert!(Cli::try_parse_from(["skills-manager-cli", "skills", "diff", "demo", "--local", "--commits"]).is_err());
         let cli = Cli::try_parse_from(["skills-manager-cli", "skills", "list", "--modified"])
             .unwrap();
         assert!(matches!(
@@ -1926,6 +1969,82 @@ fn collect_files_inner(root: &Path, current: &Path, out: &mut Vec<String>) -> an
     Ok(())
 }
 
+// ── pin and diff (sm-69q.5) ───────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct PinReport {
+    ok: bool,
+    skill_id: String,
+    name: String,
+    #[serde(flatten)]
+    pin: pinning::PinState,
+}
+
+impl PinReport {
+    fn new(skill: &app_lib::core::skill_store::SkillRecord, pin: pinning::PinState) -> Self {
+        Self {
+            ok: true,
+            skill_id: skill.id.clone(),
+            name: skill.name.clone(),
+            pin,
+        }
+    }
+}
+
+impl UpdateReport {
+    /// `update --all` leaves a pinned skill alone and says so.
+    fn pinned(skill: &app_lib::core::skill_store::SkillRecord) -> Self {
+        Self {
+            skill_id: skill.id.clone(),
+            name: skill.name.clone(),
+            source_type: skill.source_type.clone(),
+            refreshed: false,
+            error: None,
+            held_back_removals: Vec::new(),
+            pinned: true,
+        }
+    }
+}
+
+/// `skills diff`: one subcommand, one flag per view. No flag means
+/// `--upstream`.
+fn run_diff(
+    store: &SkillStore,
+    reference: &str,
+    local: bool,
+    _upstream: bool,
+    commits: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    if local {
+        run_diff_local(store, reference, json)
+    } else if commits {
+        run_diff_commits(store, reference, json)
+    } else {
+        run_diff_upstream(store, reference, json)
+    }
+}
+
+/// The library copy against the latest source: the same entries as the app's
+/// source-diff view, from the same function.
+fn run_diff_upstream(store: &SkillStore, reference: &str, json: bool) -> anyhow::Result<()> {
+    let skill = resolve_skill(store, reference)?;
+    let diff = cmd::skill_source_diff_internal(store, skill.id, store.proxy_url().as_deref())
+        .map_err(map_app_err)?;
+    print_json(&diff, json);
+    Ok(())
+}
+
+/// Upstream commits between the baseline revision and the remote head that
+/// touch the skill's directory.
+fn run_diff_commits(store: &SkillStore, reference: &str, json: bool) -> anyhow::Result<()> {
+    let skill = resolve_skill(store, reference)?;
+    let commits = pinning::upstream_commits(store, &skill.id, store.proxy_url().as_deref())
+        .map_err(map_app_err)?;
+    print_json(&commits, json);
+    Ok(())
+}
+
 // ── install ───────────────────────────────────────────────────────────────
 
 fn classify_ref(
@@ -2224,6 +2343,10 @@ fn run_update(
     let mut reports = Vec::new();
 
     for skill in targets {
+        if all && pinning::holds(&skill.id) {
+            reports.push(UpdateReport::pinned(&skill)); // sm-69q.5
+            continue;
+        }
         let report = match skill.source_type.as_str() {
             "git" | "skillssh" => {
                 match cmd::update_git_skill_internal(store, &skill.id, proxy_url.as_deref(), None, None) {
@@ -2238,6 +2361,7 @@ fn run_update(
                             .iter()
                             .map(|p| format!("{}: {}", p.location, p.path))
                             .collect(),
+                        pinned: false,
                     },
                     Err(e) => UpdateReport {
                         skill_id: skill.id.clone(),
@@ -2246,6 +2370,7 @@ fn run_update(
                         refreshed: false,
                         error: Some(e.message.clone()),
                         held_back_removals: Vec::new(),
+                        pinned: false,
                     },
                 }
             }
@@ -2261,6 +2386,7 @@ fn run_update(
                         .iter()
                         .map(|p| format!("{}: {}", p.location, p.path))
                         .collect(),
+                    pinned: false,
                 },
                 Err(e) => UpdateReport {
                     skill_id: skill.id.clone(),
@@ -2269,6 +2395,7 @@ fn run_update(
                     refreshed: false,
                     error: Some(e.message.clone()),
                     held_back_removals: Vec::new(),
+                    pinned: false,
                 },
             },
             other => UpdateReport {
@@ -2278,6 +2405,7 @@ fn run_update(
                 refreshed: false,
                 error: Some(format!("source type '{other}' cannot be refreshed")),
                 held_back_removals: Vec::new(),
+                pinned: false,
             },
         };
         reports.push(report);
@@ -2310,6 +2438,7 @@ fn run_check(
                 update_status: skill.update_status.clone(),
                 last_check_error: skill.last_check_error.clone(),
                 skipped: true,
+                pinned: false,
                 watched: WatchedCheck::default(),
             });
             continue;
@@ -2326,6 +2455,7 @@ fn run_check(
                     update_status: dto.update_status,
                     last_check_error: dto.last_check_error,
                     skipped: false,
+                    pinned: false,
                     watched: WatchedCheck::default(),
                 },
                 Err(e) => CheckReport {
@@ -2335,6 +2465,7 @@ fn run_check(
                     update_status: "error".to_string(),
                     last_check_error: Some(e.message.clone()),
                     skipped: false,
+                    pinned: false,
                     watched: WatchedCheck::default(),
                 },
             };
@@ -2344,6 +2475,7 @@ fn run_check(
     // Watched upstreams are checked for every skill, whatever its source type.
     for report in &mut reports {
         report.watched = watched_check(&report.skill_id, proxy_url.as_deref());
+        report.pinned = pinning::holds(&report.skill_id); // sm-69q.5
     }
 
     Ok(reports)
@@ -4011,6 +4143,7 @@ mod tests {
             update_status: "local_only".to_string(),
             last_check_error: None,
             skipped: false,
+            pinned: false,
             watched: WatchedCheck::default(),
         };
         let value = serde_json::to_value(&report).unwrap();
@@ -4286,5 +4419,162 @@ mod tests {
             .unwrap()
             .remove(0);
         assert!(report.skipped);
+    }
+
+    // ── pin and diff (sm-69q.5) ──
+
+    #[test]
+    fn parses_pin_unpin_and_diff() {
+        let parse = |args: &[&str]| {
+            let mut full = vec!["skills-manager-cli", "skills"];
+            full.extend_from_slice(args);
+            match Cli::try_parse_from(full).map(|cli| cli.command) {
+                Ok(Commands::Skills(SkillsArgs { command })) => Ok(command),
+                Ok(other) => panic!("unexpected command {other:?}"),
+                Err(err) => Err(err),
+            }
+        };
+        assert!(matches!(
+            parse(&["pin", "browser", "--note", "reviewed"]).unwrap(),
+            SkillsCommand::Pin { reference, note: Some(note) }
+                if reference == "browser" && note == "reviewed"
+        ));
+        assert!(matches!(
+            parse(&["unpin", "browser"]).unwrap(),
+            SkillsCommand::Unpin { reference } if reference == "browser"
+        ));
+        assert!(matches!(
+            parse(&["diff", "browser"]).unwrap(),
+            SkillsCommand::Diff { upstream: false, commits: false, .. }
+        ));
+        assert!(matches!(
+            parse(&["diff", "browser", "--commits"]).unwrap(),
+            SkillsCommand::Diff { upstream: false, commits: true, .. }
+        ));
+        assert!(parse(&["diff", "browser", "--upstream", "--commits"]).is_err());
+        assert!(matches!(
+            parse(&["list", "--pinned"]).unwrap(),
+            SkillsCommand::List { pinned: true, .. }
+        ));
+    }
+
+    #[test]
+    fn update_all_names_a_pinned_skill_and_check_carries_the_pin() {
+        let skill = SkillRecord {
+            id: "s".to_string(),
+            name: "pinned-one".to_string(),
+            description: None,
+            source_type: "git".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: "/x".to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "update_available".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        let value = serde_json::to_value(UpdateReport::pinned(&skill)).unwrap();
+        assert_eq!(value["pinned"], true);
+        assert_eq!(value["refreshed"], false);
+        assert_eq!(value["name"], "pinned-one");
+        assert!(value["error"].is_null());
+
+        // Unpinned reports keep their old shape.
+        let mut plain = UpdateReport::pinned(&skill);
+        plain.pinned = false;
+        assert!(serde_json::to_value(plain).unwrap().get("pinned").is_none());
+    }
+
+    const PIN_PROBE_ENV: &str = "SKILLS_MANAGER_CLI_PIN_PROBE";
+
+    /// `update --all` on a library with a pinned skill, run in a child test
+    /// process so the library root can be pointed at a temp folder without
+    /// touching the other tests in this binary.
+    #[test]
+    fn update_all_skips_a_pinned_skill_and_a_single_update_refuses() {
+        let root = tempdir().unwrap();
+        let name = concat!(module_path!(), "::update_pin_probe")
+            .split_once("::")
+            .unwrap()
+            .1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--ignored", "--nocapture", "--test-threads=1"])
+            .env(PIN_PROBE_ENV, root.path())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "run by update_all_skips_a_pinned_skill_and_a_single_update_refuses in a child process"]
+    fn update_pin_probe() {
+        let Some(root) = std::env::var_os(PIN_PROBE_ENV).map(PathBuf::from) else {
+            return;
+        };
+        let base = root.join("base");
+        let skills = root.join("skills");
+        central_repo::set_runtime_base_dir_override(Some(base.clone()));
+        central_repo::set_runtime_skills_dir_override(Some(skills.clone()));
+        fs::create_dir_all(&base).unwrap();
+        let dir = skills.join("held");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "---
+name: held
+---
+").unwrap();
+        let store = SkillStore::new(&base.join("skills.db")).unwrap();
+        let rev = "1".repeat(40);
+        store
+            .insert_skill(&SkillRecord {
+                id: "held-id".to_string(),
+                name: "held".to_string(),
+                description: None,
+                source_type: "git".to_string(),
+                // Never contacted: a pinned skill is skipped before any network.
+                source_ref: Some("https://pin-cli-test.invalid/r.git".to_string()),
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: Some(rev.clone()),
+                remote_revision: Some("2".repeat(40)),
+                central_path: dir.to_string_lossy().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 1,
+                updated_at: 1,
+                status: "ok".to_string(),
+                update_status: "update_available".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+        pinning::pin(&store, "held-id", Some("reviewed")).unwrap();
+
+        let reports = run_update(&store, None, true).unwrap();
+        assert_eq!(reports.len(), 1);
+        let value = serde_json::to_value(&reports[0]).unwrap();
+        assert_eq!(value["name"], "held");
+        assert_eq!(value["pinned"], true);
+        assert_eq!(value["refreshed"], false);
+        assert!(value["error"].is_null());
+        let row = store.get_skill_by_id("held-id").unwrap().unwrap();
+        assert_eq!(row.source_revision.as_deref(), Some(rev.as_str()));
+
+        let single = run_update(&store, Some("held"), false).unwrap();
+        let message = single[0].error.as_deref().unwrap();
+        assert!(message.contains("skills unpin held"), "{message}");
     }
 }

@@ -4,6 +4,7 @@ pub mod browse;
 pub mod evaluation;
 pub mod git_backup;
 pub mod projects;
+pub mod pinning;
 pub mod scan;
 pub mod presets;
 pub mod settings;

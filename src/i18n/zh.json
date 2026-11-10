@@ -1161,6 +1161,26 @@
     "unknownHint": "没有该技能上游原始版本的记录，无法区分你的改动。",
     "suspectHint": "该技能有待解决的库同步冲突，其上游原始版本记录可能不准确。请先解决冲突。"
   },
+  "pin": {
+    "title": "固定",
+    "pin": "固定此技能",
+    "unpin": "取消固定",
+    "pinnedAt": "已固定在 {{revision}}",
+    "unknownRevision": "未知",
+    "updateAvailable": "有可用更新",
+    "pinnedHint": "仍会检查更新，但在取消固定之前，任何更新都不会改动此技能。",
+    "pinnedHintWithNote": "仍会检查更新，但在取消固定之前，任何更新都不会改动此技能。备注：{{note}}",
+    "unpinnedHint": "固定后，此技能将保持在你审阅过的版本。更新（包括自动更新）会跳过它。",
+    "pinnedToast": "已固定 {{name}}",
+    "unpinnedToast": "已取消固定 {{name}}",
+    "badge": "有更新（已固定）",
+    "commits": {
+      "title": "基线之后的上游提交",
+      "count_other": "{{count}} 个提交",
+      "none": "自基线以来，没有涉及此技能的上游提交。",
+      "failed": "无法列出上游提交：{{error}}"
+    }
+  },
   "fork": {
     "menu": "派生",
     "title": "派生 {{name}}",

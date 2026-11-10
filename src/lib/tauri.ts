@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { PinState } from "./pinningApi";
 
 // ── Types ──
 
@@ -39,6 +40,8 @@ export interface ManagedSkill {
   targets: SkillTarget[];
   preset_ids: string[];
   tags: string[];
+  /** Set while the skill is pinned (sm-69q.5). */
+  pin?: PinState | null;
 }
 
 export interface SkillTarget {
@@ -351,6 +354,8 @@ export interface BatchUpdateSkillsResult {
   /** Skills left alone because updating would have removed files. */
   held_back: string[];
   failed: string[];
+  /** Pinned skills, skipped without trying (sm-69q.5). */
+  pinned?: string[];
 }
 
 export const batchUpdateSkills = (skillIds: string[]) =>

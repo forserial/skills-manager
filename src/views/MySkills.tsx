@@ -1146,9 +1146,10 @@ export function MySkills() {
   };
 
   const canRefresh = (skill: ManagedSkill) =>
-    skill.source_type === "git" ||
-    skill.source_type === "skillssh" ||
-    ((skill.source_type === "local" || skill.source_type === "import") && !!skill.source_ref);
+    !skill.pin?.pinned && // sm-69q.5: a pinned skill is never updated
+    (skill.source_type === "git" ||
+      skill.source_type === "skillssh" ||
+      ((skill.source_type === "local" || skill.source_type === "import") && !!skill.source_ref));
 
   const anyRefreshableSelected = useMemo(
     () => skills.some((skill) => selectedIds.has(skill.id) && canRefresh(skill)),
@@ -1184,6 +1185,12 @@ export function MySkills() {
       : t("mySkills.updateActions.update");
 
   const statusBadge = (skill: ManagedSkill) => {
+    if (skill.update_status === "update_available" && skill.pin?.pinned) {
+      return {
+        label: t("pin.badge"),
+        className: "bg-surface-hover text-muted",
+      };
+    }
     if (skill.update_status === "update_available") {
       return {
         label: "Update",
