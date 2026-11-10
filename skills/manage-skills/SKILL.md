@@ -135,50 +135,91 @@ Each result has `install_ref` (paste straight into `skills install`), `installs`
 
 `check` is the dry-run partner of `update`. A skill installed from a local folder is compared with that folder, not with any Git remote: `update_available` means the folder changed since it was imported, and `source_missing` means the folder is gone. This check always runs; the cache that spares Git remotes a round-trip within an hour (bypass it with `--force`) does not apply to it. Website skills have nothing to compare against and come back `skipped: true`.
 
-**An update replaces the skill's directory wholesale**, so anything written inside it that the new version does not have would be destroyed. When the CLI detects that, it applies nothing and reports the paths instead:
+`skills update` never replaces a file the user changed without asking, and never
+silently deletes a file the new version no longer ships. When it would, it
+changes nothing and reports why: see [Reading an update report](#reading-an-update-report).
+
+## Adapted skills: local changes that survive updates
+
+A git or skills.sh skill can be edited in the library and still be updated
+from upstream. Skills Manager records a **baseline** for each such skill: the
+upstream revision its files came from, with a per-file manifest of what
+upstream shipped there. Comparing the library with the baseline tells the
+user's changes apart from upstream's, so an update can keep the first and take
+the second. Line-ending differences are never a change.
+
+The baseline is recorded on install, update, merge and `set-source`. A skill
+installed before baselines existed, or by a build of Skills Manager without
+them, has none until it is backfilled (see [Baselines](#baselines-and-backfill)).
+
+### What an update does with local changes
+
+`skills update <skill>`, for **one named skill**, merges file by file against
+the baseline:
+
+- a file changed on one side only takes that side's bytes, line endings
+  included;
+- a file only the library has (the user or the skill wrote it) is kept and
+  needs no approval;
+- a text file changed on both sides is merged three-way; the library file's
+  CRLF endings are kept. When the edits clash it is a conflict;
+- a binary file changed on both sides, a file changed on one side and deleted
+  on the other, and a file both sides added differently are conflicts;
+- a file deleted upstream and unchanged locally is a removal, held for
+  approval.
+
+A clean merge applies and moves the baseline to the new revision (origin
+`merge`); the edits stay local changes against it. With any conflict nothing
+is changed and the update is held (see [Resolving a held merge](#resolving-a-held-merge)).
+
+**Merging needs a person.** `skills update --all`, the app's "update all" and
+"update selected", and the automatic updater (even with apply on) never merge.
+They update a skill only when it has no local changes, or when upstream has not
+moved since the baseline (then there is nothing to take, and they report
+nothing). A locally changed skill whose upstream moved is held, not merged.
+A skill whose baseline is unknown or suspect is never merged by anyone: every
+file the update would change is held.
+
+### Reading an update report
+
+`skills update --json` returns one row per skill. `refreshed: true` means files
+changed. These fields are omitted when empty, so test for their presence:
 
 ```jsonc
-{ "name": "ppt-master", "refreshed": false,
-  "held_back_removals": ["library: templates/mine.pptx"] }
-```
-
-The field is omitted entirely when nothing is held back, so test for its presence rather than for an empty array. `refreshed: false` *with* `held_back_removals` is **not a failure and not something to retry** — the skill is untouched and still on its old version. Show the user the listed paths and ask. There is no CLI flag to override this; only the desktop app can confirm and proceed, because only a person can say those files are expendable. The paths are prefixed with where they live (`library`, or an agent key for a deployed copy).
-
-### Local edits are not overwritten silently
-
-An edited file is never replaced without asking. `skills update <skill>` for one named skill merges local changes onto the new version (see [Merge on update](#merge-on-update)). Where it cannot merge (`--all`, the automatic updater, or a baseline that is unknown or suspect), an update that would replace a library file that differs from its baseline (see [Baselines](#baselines)) applies nothing and reports the files beside any removals:
-
-```jsonc
-{ "name": "ppt-master", "refreshed": false,
-  "held_back_overwrites": ["library: SKILL.md"],
+{ "name": "a", "refreshed": true,  "merged": ["SKILL.md"] }            // merged three-way
+{ "name": "b", "refreshed": false, "pinned": true }                     // --all skipped a pin
+{ "name": "c", "refreshed": false, "held_back_removals": ["library: templates/mine.pptx"] }
+{ "name": "d", "refreshed": false, "held_back_overwrites": ["library: SKILL.md"],
   "held_back_reason": "local_changes" }
+{ "name": "e", "refreshed": false, "merge_conflicts": [{ "path": "SKILL.md", "kind": "text" }] }
 ```
 
-- Handle it exactly like `held_back_removals`: the skill is untouched, it is not an error, don't retry. Both fields are omitted when empty. There is still no CLI flag to approve; the app's update dialog lists the edits in their own group and one confirmation covers both lists.
-- Without merging, it holds even when upstream changed a *different* file, because the update would otherwise put upstream's old copy of the edited file back. An edit that already matches upstream's new content is not held.
-- `held_back_reason` says why: `local_changes` (the listed files were edited, added or deleted locally), or, when the baseline cannot tell which files the user changed, every file the update would change is listed and the reason is `baseline_not_backfilled` (no baseline yet; `skills baseline rebuild` narrows the list), `baseline_unrecoverable` (no baseline and its revision is gone upstream, so a rebuild cannot help; approving takes upstream's version once) or `baseline_suspect` (a library sync conflict on the skill is pending; resolve it first).
-- `skills update --all`, the app's "update all" and the automatic updater (even with apply on) never approve: such skills are left alone and reported as held back.
-- **Limitation:** a device in the same sync group that runs an upstream build of Skills Manager does not know about baselines, so its updates still overwrite local edits (inferred, not tested).
+- A held row (`held_back_removals`, `held_back_overwrites`, `merge_conflicts`)
+  or a `pinned` row is **not a failure and not something to retry**: the skill
+  is untouched and still on its old version. Show the user the paths and why.
+- `held_back_removals`: the new version drops these paths (prefixed with where
+  they live: `library`, or an agent key for a copy-mode deployment). Only the
+  app can approve deleting them; there is no CLI flag, because only a person
+  can say they are expendable.
+- `held_back_overwrites`: the update would replace these locally changed
+  files. `held_back_reason` is `local_changes` (`--all` or the automatic
+  updater met a locally changed skill: offer `skills update <skill>`, which
+  merges), `baseline_not_backfilled` (no baseline yet: `skills baseline
+  rebuild <skill>` narrows the list to the real edits),
+  `baseline_unrecoverable` (no baseline, and its revision is gone upstream, so
+  a rebuild cannot help) or `baseline_suspect` (a library sync conflict on the
+  skill is pending: resolve it first). For the last three every file the
+  update would change is listed. Approving in the app takes upstream's version
+  of those files once and records a new baseline; there is no CLI flag.
+- `merge_conflicts`: see the next section.
 
-### Merge on update
+### Resolving a held merge
 
-`skills update <skill>` for one named git or skills.sh skill with local changes merges them onto the new upstream version, file by file against the baseline:
-
-- a file changed on one side only takes that side's bytes, line endings included; a file only the library has (added locally) is carried over and needs no approval;
-- a text file changed on both sides is merged three-way (line endings are ignored while merging and the library file's CRLF is kept); when the edits clash it is a conflict;
-- a binary file changed on both sides, a file changed on one side and deleted on the other, and a file both sides added differently are conflicts;
-- a file deleted upstream and unchanged locally is still a removal, held for approval as above.
-
-A clean merge applies and reports what it merged; the baseline moves to the new revision (origin `merge`), so the edits remain local changes against it:
-
-```jsonc
-{ "name": "ppt-master", "refreshed": true, "merged": ["SKILL.md"] }
-```
-
-With conflicts **nothing is changed** and the update is held. The report lists them (`merge_conflicts: [{ path, kind, ... }]`), and a pending merge is kept outside the library (`<app data>/pending-merges/<id>/`, not synced):
+The pending merge is kept outside the library (`<app data>/pending-merges/<id>/`,
+not synced). Show the user each conflict and ask; never pick a side for them.
 
 ```bash
-"$SM" --json skills merge status <skill>      # conflicts, choices so far, and versions_dir per file
+"$SM" --json skills merge status <skill>      # conflicts, choices so far, versions_dir per file
 "$SM" --json skills merge resolve <skill> SKILL.md --take local      # keep mine
 "$SM" --json skills merge resolve <skill> notes.md --take upstream   # take theirs
 "$SM" --json skills merge resolve <skill> notes.md --file fixed.md   # supply resolved content
@@ -186,41 +227,192 @@ With conflicts **nothing is changed** and the update is held. The report lists t
 "$SM" --json skills merge abort <skill>       # drop it; the library was never touched
 ```
 
-- `kind` is `text`, `binary`, `deleted_upstream`, `deleted_locally`, `added_both`, `base_gone` (the baseline revision is gone upstream, so its content cannot be had: choose a version) or `base_unavailable` (the baseline content could not be fetched now: update again later, or choose a version).
-- `versions_dir` holds `<name>.mine.<ext>`, `<name>.theirs.<ext>` and, when known, `<name>.base.<ext>`. To hand-merge, edit a copy and pass it with `--file`; content that still has conflict markers is refused.
-- A choice binds the exact two versions it was made for. `merge apply` holds again, asking only about what changed, if upstream moved or the library file was edited since. Show the user each conflict and ask; never pick a side for them.
-- Merging needs a person: `skills update --all`, the app's "update all" and the automatic updater never merge, and a skill whose baseline is unknown or suspect is never merged (it holds as above).
-- In the app, the update shows "N files merged automatically, M need a decision" with keep mine, take theirs, or open both versions per file.
+- `kind` is `text`, `binary`, `deleted_upstream`, `deleted_locally`,
+  `added_both`, `base_gone` (the baseline revision is gone upstream, so its
+  content cannot be had: choose a version) or `base_unavailable` (the baseline
+  content could not be fetched now: update again later, or choose).
+- `versions_dir` holds `<name>.mine.<ext>`, `<name>.theirs.<ext>` and, when
+  known, `<name>.base.<ext>`. To hand-merge, edit a copy and pass it with
+  `--file`; content that still has conflict markers is refused.
+- A choice binds the exact two versions it was made for. If upstream moved or
+  the library file was edited since, `merge apply` holds again and asks only
+  about what changed.
+- The app shows "N files merged automatically, M need a decision", with keep
+  mine, take theirs, or open both versions for each file.
 
-## Pin and review
+### Local changes
 
-**Pin** a git or skills.sh skill to hold it at the revision the user reviewed. A pinned skill is still checked, but nothing moves it: `skills update <skill>` refuses with a message naming `skills unpin`, and `skills update --all`, the app's "update all" and the automatic updater skip it and report it. Pinning is also the safety measure for a skill that was clean when assessed and may not stay so.
+Against its baseline, every skill reads one of: `clean`, `changed`,
+`baseline_unknown` (a git skill with no baseline yet), `baseline_suspect` (a
+library sync conflict on it is pending, so its baseline may describe the other
+device's content) or `untracked` (a local skill: no upstream, no baseline).
+Treat `baseline_suspect` like `baseline_unknown`.
+
+```bash
+"$SM" --json skills status <skill>     # baseline {revision, origin, recorded_at, file_count};
+                                       # local_changes {state, baseline_revision, files: [{path, state}]}
+"$SM" --json skills list --modified    # only edited skills; rows gain local_change_count,
+                                       # baseline_known and local_state
+"$SM" --json skills diff <skill> --local   # the library copy against its baseline, file by file
+```
+
+- File states are `modified`, `added` (not in the baseline) and `deleted` (in
+  the baseline, gone from the library).
+- `local_change_count` is `null` when the baseline is not known: an unknown
+  baseline is not "no changes".
+- `diff --local` takes the baseline content from this device's cache, else
+  fetches the baseline revision. When neither works, `entries` is `null` and
+  `files` still lists the changed paths, with the reason in `message`.
+- The app shows the same: a "Your changes" section in the detail panel, an
+  "Edited" marker on the card, and a quieter "Baseline unknown" marker.
+
+### Baselines and backfill
+
+```bash
+"$SM" --json skills baseline rebuild --all       # skills without a baseline
+"$SM" --json skills baseline rebuild <skill>     # one skill, even if it has one
+```
+
+- Backfill fetches each skill's recorded source revision and rebuilds the
+  manifest. It writes only the baseline files. The report counts `rebuilt`,
+  `skipped`, `unreachable` and `failed`, and exits zero when some are
+  unreachable. `unreachable` means the server no longer has that revision
+  ("not our ref"): retrying will not help. `failed` is any other failure:
+  retry later.
+- `skipped` covers skills with no recorded source revision. After a backup
+  clone every skill on the new device has none, so **run backfill on the
+  original device**; the baseline files then travel with the library.
+- Each rebuilt skill reports `differing_files`. Backfill trusts the recorded
+  revision, which can be older than the content when another device updated
+  the skill, so a large count is worth a look.
+
+### Pin and review
+
+**Pin** a git or skills.sh skill to hold it at the revision the user reviewed.
+A pinned skill is still checked, but nothing moves it: `skills update <skill>`
+refuses with a message naming `skills unpin`, and `--all`, the app's update
+buttons and the automatic updater skip it and report it.
 
 ```bash
 "$SM" --json skills pin <skill> --note "reviewed 2026-11"   # note is optional
 "$SM" --json skills unpin <skill>
 "$SM" --json skills list --pinned
+"$SM" --json skills diff <skill>             # library copy against the latest source (= --upstream)
+"$SM" --json skills diff <skill> --commits   # upstream commits since the baseline that touch the skill
 ```
 
-- `skills status --json` reports `pin: { pinned, revision, pinned_at, note }`, or `null` when not pinned. `pinned_at` is Unix milliseconds.
-- `skills check --json` carries `pinned: true` for a pinned skill. With `update_status: "update_available"` that reads "update available (pinned)": upstream moved, and the skill stays put until unpinned.
-- `skills update --all --json` lists a pinned skill with `pinned: true` and `refreshed: false`. That is not a failure and not something to retry.
-- After `skills unpin`, the next update is an ordinary one.
-- Local and website skills have no upstream revision and cannot be pinned.
-- Pins live in `.skills-manager/fork-pin.<skill_id>.json` and sync with the library; the newest change wins when two devices change the same pin. Never edit them by hand.
+- `status` reports `pin: { pinned, revision, pinned_at, note }` or `null`.
+  `check` carries `pinned: true`; with `update_status: "update_available"` that
+  reads "update available (pinned)".
+- After `unpin` the next update is an ordinary one. Local and website skills
+  have no upstream revision and cannot be pinned.
+- `--upstream` returns `{ revision, entries: [{ relative_path, status,
+  content_kind, original_text, updated_text, ... }] }`; `original_text` is the
+  library copy.
+- `--commits` returns `{ base_revision, base_from, remote_revision, subpath,
+  reachable, message, commits: [{ sha, date, author, subject }], truncated }`,
+  newest first, starting at the baseline revision (`base_from: "baseline"`),
+  or the recorded source revision without one. `reachable: false` means the
+  base revision is gone or no longer an ancestor; `message` says which. Not an
+  error to retry.
 
-Before deciding to move a skill, **review** what an update would bring:
+### Change notes and patch export
+
+Each locally changed file can carry a one-line reason. When the user asks why
+a file was changed, or to record why, use these instead of a side file.
 
 ```bash
-# The library copy against the latest source: the same entries as the app's diff view
-"$SM" --json skills diff <skill>                # same as --upstream
-# Upstream commits since the baseline revision that touch the skill's directory
-"$SM" --json skills diff <skill> --commits
+"$SM" --json skills changes <skill>     # files: [{ path, state, note, note_updated_at }]
+"$SM" --json skills changes note <skill> refs/a.md "Windows paths"
+"$SM" --json skills changes note <skill> refs/a.md --clear
+"$SM" skills changes export <skill> > local.patch
+"$SM" --json skills changes export <skill> --output local.patch   # prints a summary
 ```
 
-- `--upstream` returns `{ revision, entries: [{ relative_path, status, content_kind, original_text, updated_text, ... }] }`. `original_text` is the library copy, `updated_text` the source. `status` is `added`, `removed` or `modified`.
-- `--commits` returns `{ base_revision, base_from, remote_revision, subpath, reachable, message, commits: [{ sha, date, author, subject }], truncated }`, newest first. It starts from the skill's baseline revision (`base_from: "baseline"`), or from its recorded source revision when it has no baseline. It fetches history over the network, blobless, without locking the library.
-- `reachable: false` means the list cannot be made: the base revision is gone upstream, or upstream history was rewritten so it is no longer an ancestor of the head. `message` says which. That is not an error to retry.
+- Only a file that differs from a known baseline takes a note. While the
+  baseline is unknown or suspect, `note` is refused and stored notes are kept
+  under `held_notes`.
+- A note drops by itself once its file no longer differs from the baseline
+  (reverted, or upstream caught up). It survives merges while the file still
+  differs.
+- The patch covers changed files only. Its paths start at the upstream
+  repository root (`path_prefix` is the skill's directory there), so `git
+  apply local.patch` works at the root of a checkout of `baseline_revision`.
+  Each note is a `# <path>: <note>` line above its file's `diff --git` header.
+- Export needs the baseline content (this device's cache, else a fetch). It
+  fails with a message when neither works, when the baseline is unknown or
+  suspect, or when there is nothing to export. Don't retry "revision is gone
+  upstream".
+- In the app: a note button per file in "Your changes", and "Export patch".
+
+### Borrowed skills: watched upstreams and fork
+
+For a skill that will never merge with a source again (a rewrite, or the
+user's own skill that borrowed an idea), record where it came from as a
+**watched upstream**. It is only checked for movement: nothing is fetched into
+the library and nothing is merged. It works for any source type and does not
+change the skill's own source.
+
+```bash
+"$SM" --json skills watch add <skill> --git-url owner/repo --subpath skills/x --note "lifted the retry loop"
+"$SM" --json skills watch add <skill> --git-url https://github.com/o/r/tree/main/skills/x --revision <sha>
+"$SM" --json skills watch list <skill> --check      # `moved` per entry; --check resolves the remotes first
+"$SM" --json skills watch seen <skill> <watch-id>   # "I have looked": moved clears
+"$SM" --json skills watch remove <skill> <watch-id>
+"$SM" --json skills fork <skill> --as <new-name>    # a local copy watching the original's git source
+```
+
+- Without `--revision`, `watch add` counts the current head as seen. With
+  `--subpath`, only commits that change that directory count as movement. An
+  unreachable upstream is reported in its entry's `check_error`.
+- `skills check` carries `watched_moved` for every skill (and `watched` when it
+  watches something), so one `skills check --all` covers updates and borrowed
+  sources.
+- `fork` refuses a name that is taken. The new skill is `local` with no source
+  folder, tags, presets or deployments; the original is untouched. Content is
+  copied byte for byte except the `name:` line of the `SKILL.md` frontmatter.
+  The watch starts at the original's baseline revision (else its source
+  revision); a local, imported or website original has no git source, so its
+  fork watches nothing. `skills update --all` reports a fork with an error
+  (`missing its original source path`), like any local skill with no source
+  folder; that is expected.
+
+### Across devices, and known limitations
+
+Baselines, pins, watched upstreams and notes live in
+`.skills-manager/fork-<baseline|pin|watch|notes>.<skill_id>.json` and travel
+with the library through Git backup. Nothing is written inside a skill folder.
+Never edit or delete these files by hand; removing a skill removes them.
+
+- An edit made on one device survives an update on another: the second device
+  reads the baseline from the synced file and fetches the base content it needs.
+  On a device that received the library by clone, `skills check` reports
+  `unknown` for a skill until it is updated there, because the recorded source
+  revision does not sync (the baseline's does).
+- When two devices change the same skill's pin, watches or notes at once, the
+  later commit wins.
+- When one device edits a skill while another updates it, the library sync
+  reports a conflict, and until it is resolved the skill reads
+  `baseline_suspect`: every update holds and notes are refused. Resolving it
+  sets the baseline to match the content kept (keep local: this device's
+  earlier baseline; use remote: the other device's; when that cannot be found,
+  the baseline is dropped and reads unknown). The next update then neither
+  loses the edit nor keeps stale upstream content.
+- Pending merges (`<app data>/pending-merges/`) and the base-content cache are
+  per device and do not sync.
+- **A device running an upstream build of Skills Manager** keeps the fork files
+  untouched, but its updates overwrite local edits and ignore pins, and a sync
+  then carries the overwrite to the other devices (inferred). Its updates leave
+  baselines stale, so upstream's changes read as local changes here until the
+  next update on this build. Keep such devices out of a sync group that holds
+  adapted skills.
+- **First connect by clone.** When an existing library first clones a backup
+  remote, the remote's metadata folder replaces the local one: local baselines,
+  pins, watches and notes are dropped without a message, and a skill that only
+  the local library has loses its library record (its folder stays, unmanaged).
+  Skills present on both sides take the remote's state (one whose content
+  differs stops the clone until the app sets the local copy aside). Connect
+  the device that holds the adapted skills first and clone the others from it.
 
 ## Remove
 
@@ -317,124 +509,11 @@ deployments keyed to it all stay intact.
 A content difference is refused without it. With it, the whole skill directory is
 replaced — staged, swapped in, and the old copy deleted — so anything in the
 library copy that the new source does not ship is gone. Unlike `skills update`,
-this path has **no** `held_back_removals` check: nothing is withheld, and nothing
-asks. `--dry-run` cannot tell you which files are at stake, only that something
+this path has **no** `held_back_removals` or local-change check and never
+merges: edited files are replaced too, nothing is withheld, and nothing asks. `--dry-run` cannot tell you which files are at stake, only that something
 differs. Never pass `--force` on the user's behalf — report `content_changed:
 true`, say that proceeding overwrites the library copy wholesale, and let them
 decide.
-
-## Baselines
-
-A git or skills.sh skill carries a **baseline**: the upstream revision its files
-came from and a per-file manifest of what upstream shipped there. It is recorded
-on install, update and `set-source`, and lets later features tell local edits
-apart from upstream changes. `skills show` and `skills status --json` report it
-as `baseline: { revision, origin, recorded_at, file_count }`, or `null` when it
-is unknown. Recording it changes no update behaviour yet.
-
-```bash
-# Backfill skills installed before baselines existed (fetches each skill's
-# recorded source revision; network, but writes only the baseline files)
-"$SM" --json skills baseline rebuild --all
-# One skill, even if it already has a baseline
-"$SM" --json skills baseline rebuild <skill>
-```
-
-- The report counts `rebuilt`, `skipped`, `unreachable` and `failed`, and exits zero when some are unreachable. `unreachable` means the server no longer has that revision ("not our ref"): nothing is written and retrying will not help. `failed` is any other failure ("could not fetch now"): retry later.
-- `skipped` covers skills with no recorded source revision. After a backup clone every skill on the new device has none, so **run backfill on the original device**; the baseline files then travel with the library.
-- Each rebuilt skill reports `differing_files`: library files that differ from the rebuilt baseline. Backfill trusts the recorded revision, which can be older than the content when another device updated the skill, so a large count is worth a look.
-- Baselines live in `.skills-manager/fork-baseline.<skill_id>.json` and sync with the library. Never edit or delete them by hand; removing a skill removes its baseline.
-- **Known limitations.** A device running an upstream build of Skills Manager keeps these files but its updates do not touch them, so in a mixed group of devices a baseline can go stale. When an existing library first connects to a remote by clone, the remote's metadata folder replaces the local one and local baselines are dropped; those skills read `baseline: null` until rebuilt. After a library sync conflict is resolved, the baseline follows the kept content, or is dropped when that cannot be determined.
-
-### Local changes
-
-Against its baseline, every skill reads one of: `clean`, `changed`,
-`baseline_unknown` (a git skill with no baseline yet), `baseline_suspect` (a
-library sync conflict on it is pending, so its baseline may describe the other
-side's content) or `untracked` (a local skill: no upstream, no baseline). Treat
-`baseline_suspect` like `baseline_unknown`. Line-ending differences are never
-a change.
-
-```bash
-# Which files of a skill differ from what upstream shipped
-"$SM" --json skills status <skill>     # local_changes: { state, baseline_revision, files: [{ path, state }] }
-# Only the skills with local edits; every list row gains local_change_count,
-# baseline_known and local_state
-"$SM" --json skills list --modified
-# The library copy against its baseline, file by file
-"$SM" --json skills diff <skill> --local
-```
-
-- File states are `modified`, `added` (not in the baseline) and `deleted` (in the baseline, gone from the library).
-- `local_change_count` is `null` when the baseline is not known: an unknown baseline is not "no changes".
-- `skills diff --local` takes the baseline content from this device's cache, else fetches the baseline revision. When neither works, `entries` is `null` and `files` still lists the changed paths, with the reason in `message`.
-- The app shows the same: a "Your changes" section in the skill's detail panel, an "Edited" marker on its card, and a quieter "Baseline unknown" marker on git skills without a baseline. Edits made on disk show without a restart.
-
-### Change notes and patch export
-
-Each locally changed file can carry a one-line reason ("removed the usage
-ping", "Windows paths"). Notes sync with the library. When the user asks why a
-file was changed, or to record why, use these instead of a side file.
-
-```bash
-# The local changes with state and note: files: [{ path, state, note, note_updated_at }]
-"$SM" --json skills changes <skill>
-# Set a changed file's note (path relative to the skill directory), or clear it
-"$SM" --json skills changes note <skill> refs/a.md "Windows paths"
-"$SM" --json skills changes note <skill> refs/a.md --clear
-# A unified diff of the library copy against the baseline, to stdout or a file
-"$SM" skills changes export <skill> > local.patch
-"$SM" --json skills changes export <skill> --output local.patch   # prints a summary
-```
-
-- Only a file that differs from a known baseline takes a note. On `baseline_unknown` or `baseline_suspect`, `note` is refused and stored notes are kept under `held_notes`.
-- A note is dropped by itself once its file no longer differs from the baseline: the file was reverted, or an update brought upstream level with it. It stays with its path while the file still differs, whatever the baseline revision.
-- The patch covers the changed files only. Its paths start at the upstream repository root (`path_prefix` in the JSON is the skill's directory there), so `git apply local.patch` works at the root of a checkout of the baseline revision (`baseline_revision`). Each note is a `# <path>: <note>` line directly above its file's `diff --git` header. The library side takes the baseline file's line endings, since endings are never a change.
-- Export needs the baseline content: this device's cache, else a fetch of the baseline revision. It fails with a message when neither works, when the baseline is unknown or suspect, or when there is nothing to export. Don't retry a "revision is gone upstream" failure.
-- The app shows the notes in "Your changes": a note button on each file (Enter saves, Esc cancels, empty removes) and an "Export patch" button that asks where to save.
-
-## Borrowed skills: watched upstreams and fork
-
-For a skill that will never merge with a source again — a rewrite, or the
-user's own skill that borrowed an idea — record where it came from as a
-**watched upstream**. It is only checked for movement: nothing is fetched into
-the library and nothing is merged. It works for skills of any source type and
-does not change the skill's own source.
-
-```bash
-# Watch a location. Without --revision, its current head counts as already seen.
-"$SM" --json skills watch add <skill> --git-url owner/repo --subpath skills/x --note "lifted the retry loop"
-"$SM" --json skills watch add <skill> --git-url https://github.com/o/r/tree/main/skills/x --revision <sha>
-
-# List: `moved` per entry, as of the last check. --check resolves the remotes first.
-"$SM" --json skills watch list <skill> --check
-
-# "I have looked": the upstream's current revision becomes the seen one; moved clears.
-"$SM" --json skills watch seen <skill> <watch-id>
-"$SM" --json skills watch remove <skill> <watch-id>
-
-# Copy a library skill into a new local skill that watches the original's git source
-"$SM" --json skills fork <skill> --as <new-name>
-```
-
-- `skills check` carries `watched_moved` for every skill (and a `watched` list
-  when it watches something), whatever its source type, so one
-  `skills check --all` covers both updates and borrowed sources.
-- With `--subpath`, only commits that change that directory count as movement.
-  An upstream that can't be reached is reported in `check_error` on its entry;
-  the rest of the check goes on.
-- `fork` refuses a name that is already taken. The new skill is `local` with no
-  source folder, no tags, no preset membership and no deployments; the original
-  is untouched. Its content is copied byte for byte except the `name:` line of
-  the `SKILL.md` frontmatter, which becomes the new name (the library names a
-  skill after that line). The watch starts at the revision the original's
-  content came from (its baseline, else `source_revision`); when neither is
-  known it starts unseen and the first check reports it as moved. A local,
-  imported or website original has no git source, so its fork watches nothing.
-- Watches live in `.skills-manager/fork-watch.<skill_id>.json` and travel with
-  the library through Git backup; nothing is written inside a skill folder.
-  When two devices change the same skill's watches at once, the later commit
-  wins. Deleting the skill deletes its watches.
 
 ## Tag
 
@@ -534,7 +613,7 @@ The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are
 "$SM" skills update --all    # apply
 ```
 
-Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks. Skills with `held_back_removals` or `held_back_overwrites` were held for the user's decision; list the paths and say why. `--all` never merges local changes: for a locally changed skill, offer `skills update <skill>`, which does.
+Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks. Skills with `held_back_removals` or `held_back_overwrites` were held for the user's decision; list the paths and say why (see [Reading an update report](#reading-an-update-report)). `--all` never merges local changes: for a skill held with `held_back_reason: "local_changes"`, offer `skills update <skill>`, which does.
 
 ## Pitfalls
 

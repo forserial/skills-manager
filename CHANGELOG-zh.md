@@ -5,6 +5,26 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 发布概览
+- 从 Git 安装的技能现在可以修改，并且照样能更新。更新技能时会把你的修改带到新版本上；任何更新方式都不会在未经询问时覆盖你改过的内容。
+
+### 用户可见更新
+- **修改在更新后保留** — Skills Manager 会为每个 Git 和 skills.sh 技能记录上游当时提供的内容（基线）。更新单个技能时会逐个文件把你的修改合并到新版本上；你添加的文件会保留；如果你和上游改到了同一处，什么都不会改动，更新会等你选择保留我的、采用上游的，或打开两个版本对照。
+- **无人值守的更新从不覆盖** — 全部更新、更新所选和自动更新（即使开启了自动应用）都会跳过有修改的技能，并将其报告为已暂缓。此版本之前安装的技能会一直暂缓，直到重建基线或你确认一次更新。
+- **查看并说明你的修改** — 详情面板新增 **你的修改**：列出改动的文件并可查看差异，每个文件可附一行说明，并可 **导出补丁**。卡片上显示 **已修改**，较早安装的 Git 技能显示 **基线未知**。
+- **固定与审阅** — 可以把技能固定在你审阅过的版本；它仍会被检查并显示 **有更新（已固定）**，但在取消固定之前不会被移动。源码差异页现在会列出自基线以来的上游提交。
+- **派生与关注** — 可以把库中的技能派生为你自己的副本，它会关注来源；检查更新时会提示来源是否有变化。
+- 基线、固定、说明和关注记录会随技能库通过备份同步。某个技能有待处理的同步冲突时，它的更新会暂缓；解决冲突后，基线会与你保留的版本一致。
+- **已知限制** — 运行没有此功能的版本的设备在更新时仍会覆盖修改，并忽略固定。已有的技能库第一次通过克隆连接备份时，备份里的记录会替换本地记录，只存在于本地的技能将不再被管理。
+
+### 开发者与治理更新
+- CLI：`skills status` 和 `skills show` 新增 `baseline` 与 `local_changes`；新增 `skills list --modified` 和 `--pinned`；`skills diff [--upstream | --commits | --local]`；`skills pin` / `unpin`；`skills baseline rebuild`；`skills merge status | resolve | apply | abort`；`skills changes`、`changes note`、`changes export`；`skills watch add | list | remove | seen`；`skills fork --as`。`skills update` 会报告 `held_back_overwrites`、`held_back_reason`、`merged`、`merge_conflicts`，在 `--all` 下还会报告 `pinned`；`skills check` 会报告 `pinned` 和 `watched_moved`。
+- 新模块：`core/fork_files.rs`（分支自有的按技能文件，平铺在 `.skills-manager/` 下，由技能库同步按整文件合并）、`core/baseline.rs`（基线、本地修改、覆盖暂缓，以及 `cache/baselines.git` 中的基线内容存储）、`core/pinning.rs`、`core/watched_upstreams.rs`、`core/change_notes.rs` 和 `core/skill_update_merge/`（逐文件计划，以及基于内存对象库上 git2 `merge_trees` 的三方合并）。没有数据库迁移，`LATEST_VERSION` 仍为 9。
+- 当上游自基线以来没有变化时，`skills update --all`、更新所选和自动更新不再把有修改的技能报告为暂缓：没有可取的内容，技能库保持原样（sm-69q.11）。
+- `skills/manage-skills/SKILL.md` 用一个"Adapted skills"章节取代了各功能分别添加的内容；`REVIEW.md` 把新模块列入深度审查。
+
 ## [1.45.0] - 2026-11-10
 
 ### 发布概览

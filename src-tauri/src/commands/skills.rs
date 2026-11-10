@@ -2267,6 +2267,9 @@ pub fn update_git_skill_with(
         };
         merge_report = prepared.as_ref().map(|p| p.report.clone());
         let content_changed = prepared.as_ref().map_or(content_changed, |p| p.changes_library());
+        // sm-69q.11: upstream still matches the baseline; the differences are all local.
+        let upstream_unchanged = prepared.is_none() && content_changed && crate::core::baseline::upstream_unchanged_since_baseline(store, &skill, &new_hash);
+        let content_changed = content_changed && !upstream_unchanged;
         let staged_source = prepared.as_ref().map_or(skill_dir.as_path(), |p| p.merged_dir());
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
         if let Some(prepared) = &prepared {
@@ -2383,7 +2386,7 @@ pub fn update_git_skill_with(
             Some(_) => crate::core::baseline::Origin::Merge,
             None => crate::core::baseline::Origin::Update,
         };
-        if !prepared.as_ref().is_some_and(|p| p.is_noop()) {
+        if !prepared.as_ref().is_some_and(|p| p.is_noop()) && !upstream_unchanged {
             crate::core::baseline::on_upstream_accepted_unlocked(&skill.id, &skill.name, &remote_revision, origin, &skill_dir);
         }
         Ok(UpdateOutcome::Applied { content_changed })
