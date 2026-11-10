@@ -781,6 +781,7 @@ pub fn delete_managed_skills_by_ids(
 
             store.delete_skill(skill_id)?;
             crate::core::fork_files::remove_all_for_unlocked(skill_id)?;
+            crate::core::baseline::forget_base_content(skill_id);
             store.log_audit(
                 AuditDraft::new("remove")
                     .skill(skill_id.clone(), skill.name.clone())
@@ -2263,6 +2264,7 @@ pub fn update_git_skill_internal(
             resync_copy_targets(store, &skill.id)?;
             sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         }
+        crate::core::baseline::on_upstream_accepted_unlocked(&skill.id, &skill.name, &remote_revision, crate::core::baseline::Origin::Update, &skill_dir);
         Ok(UpdateOutcome::Applied { content_changed })
     })();
     git_fetcher::cleanup_temp(&temp_dir);
@@ -2501,6 +2503,7 @@ pub fn set_git_source_internal(
         source_committed.set(true);
         resync_copy_targets(store, &skill.id)?;
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+        crate::core::baseline::on_upstream_accepted_unlocked(&skill.id, &skill.name, &remote_revision, crate::core::baseline::Origin::Install, &skill_dir);
         Ok((resolved_subpath.unwrap_or_default(), content_changed))
     })();
 
@@ -2689,6 +2692,7 @@ pub fn store_installed_skill_unlocked(
                 .map_err(AppError::db)?;
         }
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+        crate::core::baseline::on_installed_unlocked(&existing.id, &metadata.source_type, metadata.source_revision.as_deref(), &result.central_path);
 
         if let Some(scenario_id) = active_scenario_id {
             if let Err(e) =
@@ -2732,6 +2736,7 @@ pub fn store_installed_skill_unlocked(
             .map_err(AppError::db)?;
     }
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    crate::core::baseline::on_installed_unlocked(&id, &metadata.source_type, metadata.source_revision.as_deref(), &result.central_path);
 
     if let Some(scenario_id) = active_scenario_id {
         if let Err(e) = super::presets::sync_skill_to_active_preset(store, scenario_id, &id) {
