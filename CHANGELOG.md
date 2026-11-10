@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.46.0] - 2026-11-10
 
 ### Release Overview
 - Skills you install from Git can now be edited and still be updated. Updating a skill carries your changes onto the new version; nothing you changed is overwritten without asking, by any update path.
@@ -17,13 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pin and review** — Pin a skill at the revision you reviewed; it is still checked, and shows **Update (pinned)**, but nothing moves it until you unpin. The source diff now lists the upstream commits since your baseline.
 - **Fork and watch** — Fork a library skill into your own copy that watches where it came from; checking for updates tells you when the source moves.
 - Baselines, pins, notes and watches sync with the library through Backup. While a sync conflict on a skill is pending, its updates are held; resolving it sets the baseline to match the version you kept.
-- **Known limitations** — A device running a build without this feature still overwrites edits when it updates, and ignores pins. When an existing library first connects to a backup by cloning it, the backup's records replace the local ones, and a skill only the local library had is no longer managed.
+- **Watched sources in the normal checks** — Checking for updates now also checks every skill's watched sources, cards show when one has moved, and the **Borrowed from** section can add and remove watches.
+- **Evaluations know what they judged** — Each evaluation records the upstream revision it judged and says when upstream has moved on since. **Evaluate update** judges the version an update would install before you apply it.
+- **Unmanaged folders** — A skill folder in the library with no record is no longer invisible: a notice lists such folders and offers to adopt each one back in place. Its old source, baseline, pin and notes cannot be recovered.
+- **First connect to a backup keeps local skills** — When an existing library first connects to a backup by cloning it, skills and presets only the local library had are kept, with their baselines, pins, notes and watches.
+- **Fewer ways to lose a skill** — Installs and imports stage the folder first, so a failed one leaves nothing behind and a failed reinstall keeps the old copy; importing from a project now records the skill properly; deleting a skill whose folder cannot be removed keeps it and reports the failure; leftovers from an interrupted update are put back or cleaned up at the next start.
+- **Known limitations** — A device running a build without this feature still overwrites edits when it updates, ignores pins, and drops local-only skills when it first connects to a backup by cloning. A crash at the wrong moment can still leave a skill folder without its record; the unmanaged-folders notice finds it.
 
 ### Developer & Governance
 - CLI: `skills status` and `skills show` gain `baseline` and `local_changes`; `skills list --modified` and `--pinned`; `skills diff [--upstream | --commits | --local]`; `skills pin` / `unpin`; `skills baseline rebuild`; `skills merge status | resolve | apply | abort`; `skills changes`, `changes note`, `changes export`; `skills watch add | list | remove | seen`; `skills fork --as`. `skills update` reports `held_back_overwrites`, `held_back_reason`, `merged`, `merge_conflicts` and, under `--all`, `pinned`; `skills check` reports `pinned` and `watched_moved`.
 - New modules: `core/fork_files.rs` (fork-owned per-skill files, flat in `.skills-manager/`, merged whole-file by library sync), `core/baseline.rs` (baselines, local changes, overwrite holds, base-content store in `cache/baselines.git`), `core/pinning.rs`, `core/watched_upstreams.rs`, `core/change_notes.rs` and `core/skill_update_merge/` (per-file plan and three-way merge on git2 `merge_trees` over an in-memory object database). No database migration; `LATEST_VERSION` is still 9.
 - `skills update --all`, update selected and the automatic updater no longer report an edited skill as held when its upstream has not moved since the baseline: there is nothing to take, so the library is left as it is (sm-69q.11).
 - `skills/manage-skills/SKILL.md` has one "Adapted skills" section in place of the per-feature additions; `REVIEW.md` lists the new modules for deep review.
+- CLI: `skills evaluate --incoming`; `skills evaluations` reports `source_revision` and `baseline_revision`; `skills orphans` and `skills orphans adopt`. `skill_evaluations` gains two columns through `ensure_fork_schema`, not a migration.
+- Library integrity (upstream bugs found by the sm-69q audit): the CLI's `git pull`, `git restore` and `git clone` reindex under the lock that changed the disk; the reindex is one transaction, and a failed one pauses metadata deletions until the next good reindex; a dangling linked skill or a case-only folder difference keeps its record; installs place folders through `core/skill_placement.rs`; deletes retire the folder before dropping the record; `core/swap_leftovers.rs` restores or cleans hidden `.staged-` / `.backup-` folders at startup; `core/clone_metadata_carry.rs` carries local-only metadata into a first clone.
+- More new modules: `core/reindex_guard.rs`, `core/skill_placement.rs`, `core/folder_retire.rs`, `core/swap_leftovers.rs`, `core/clone_metadata_carry.rs`, `core/orphaned_folders.rs`, `core/evaluation_incoming.rs`, and `core/fail_points.rs` for failure-injection tests.
 
 ## [1.45.0] - 2026-11-10
 
