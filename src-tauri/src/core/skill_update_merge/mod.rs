@@ -32,6 +32,7 @@
 //! refused while it still has markers.
 
 mod build;
+pub mod cleanup;
 pub mod pending;
 mod plan;
 
