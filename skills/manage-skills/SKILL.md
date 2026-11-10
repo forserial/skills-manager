@@ -521,6 +521,49 @@ differs. Never pass `--force` on the user's behalf — report `content_changed:
 true`, say that proceeding overwrites the library copy wholesale, and let them
 decide.
 
+## Unmanaged folders in the library
+
+A folder at the library root that no skill record points at is invisible: not
+listed, not updated, not deployed. It happens after a first connect by clone on
+an older or upstream build, with a folder copied in by hand, or when a metadata
+file was lost. `skills orphans` finds them; it only reads.
+
+```bash
+# Folders with no record, and nothing else. Never moves, deletes or writes anything.
+"$SM" --json skills orphans
+
+# Give one a record in place, as a new local skill (its files are not changed)
+"$SM" --json skills orphans adopt <dir_name>
+
+# Every listed folder that has a SKILL.md
+"$SM" --json skills orphans adopt --all
+```
+
+- Left out of the list: `.git`, `.skills-manager`, every other dot-folder, the
+  clone's set-aside folders and whatever the library's `.gitignore` ignores at
+  the root. Folders the backup keeps out for their size are still listed.
+- A folder without a `SKILL.md` is listed (`has_skill_md: false`) but adoption
+  refuses it; add a `SKILL.md` or move it out of the library.
+- The skill is named from its `SKILL.md` `name:`, else the folder name — the
+  same rule the startup reindex uses, so the name sticks.
+- This is not `skills adopt`: that copies skills in from agent directories;
+  `orphans adopt` registers a folder already in the library, where it is.
+
+**Say plainly what cannot be recovered.** The adopted skill gets a new id. The
+folder's old id, source, baseline, pin, change notes and watched upstreams are
+gone for good, and it starts with no tags, presets or deployments (an agent
+directory may still hold an old copy or link of it). The adopt report carries
+this as `cannot_recover`. To link it to git again use `skills set-source`
+(above): the baseline is then upstream's **current** revision, not the one the
+folder came from, so which changes were local can no longer be told apart.
+set-source refuses when the folder differs from upstream and `--force`
+replaces the folder with upstream's copy, so run it with `--dry-run` first and
+let the user decide. Afterwards, `skills diff --upstream <skill>` compares the
+skill with upstream.
+
+In the app, the skills view shows "N folders in the library are not managed"
+when there are any, with a list that adopts one at a time and the same warning.
+
 ## Tag
 
 ```bash

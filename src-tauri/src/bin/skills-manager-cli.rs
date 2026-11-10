@@ -12,6 +12,10 @@ use app_lib::core::{
     well_known,
 };
 use app_lib::core::watched_upstreams;
+// sm-69q.16: `skills orphans`.
+#[path = "skills-manager-cli-parts/orphans.rs"]
+mod orphans_cli;
+use orphans_cli::{run_orphans, OrphansArgs};
 use app_lib::core::pinning;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -323,6 +327,9 @@ enum SkillsCommand {
         /// Skill ref (id / name / dir basename / central path)
         reference: String,
     },
+    /// Library folders no skill record points at (sm-69q.16): list them, or
+    /// `orphans adopt` one back in place as a new local skill.
+    Orphans(OrphansArgs),
 }
 
 #[derive(Args, Debug)]
@@ -1389,6 +1396,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             let skill = resolve_skill(store, &reference)?;
             print_json(&store.list_evaluations(&skill.id)?, json);
         }
+        SkillsCommand::Orphans(args) => run_orphans(args, store, json)?,
     }
     Ok(())
 }

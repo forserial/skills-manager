@@ -233,6 +233,21 @@
     "restoreSuccess": "备份已恢复，技能已就绪。",
     "hint": "之后随时可以在侧边栏的「备份」页连接或恢复备份。"
   },
+  "orphanedFolders": {
+    "notice_one": "库中有 {{count}} 个文件夹未被管理：应用和 CLI 不会列出它，更新和部署也会跳过它。",
+    "notice_other": "库中有 {{count}} 个文件夹未被管理：应用和 CLI 不会列出它们，更新和部署也会跳过它们。",
+    "review": "查看",
+    "title": "库中未被管理的文件夹",
+    "intro": "这些文件夹位于库中，但没有任何技能记录指向它们。认领后，它会就地成为一个本地技能：其文件不会被复制、移动或修改。",
+    "warningTitle": "认领无法找回的内容",
+    "warningLost": "该文件夹会成为一个具有新 ID 的新技能。它原来的 ID、来源、基线、固定状态、变更备注和关注的上游都已永久丢失，并且一开始没有标签、预设或部署。",
+    "warningSource": "如需重新关联 git，请在 CLI 中使用 `skills set-source`。届时基线是上游的当前版本，而不是该文件夹原来的版本，因此再也无法区分哪些修改是本地的。当文件夹与上游不同时 set-source 会拒绝（--force 会用上游的副本替换它），所以请先用 --dry-run 检查；之后可用 `skills diff --upstream` 将技能与上游比较。",
+    "adopt": "认领",
+    "adopted": "已将 {{name}} 认领为本地技能",
+    "adoptFailed": "无法认领该文件夹",
+    "noSkillMd": "没有 SKILL.md",
+    "noSkillMdHint": "只有包含 SKILL.md 的文件夹才能被认领。请添加一个，或将该文件夹移出库。"
+  },
   "mySkills": {
     "title": "技能库",
     "applyToDefault": "应用 Preset",

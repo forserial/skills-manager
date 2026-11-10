@@ -233,6 +233,21 @@
     "restoreSuccess": "Backup restored — your skills are ready.",
     "hint": "You can connect or restore a backup at any time from the Backup page in the sidebar."
   },
+  "orphanedFolders": {
+    "notice_one": "{{count}} folder in the library is not managed: the app and CLI don't list it, and updates and deployments skip it.",
+    "notice_other": "{{count}} folders in the library are not managed: the app and CLI don't list them, and updates and deployments skip them.",
+    "review": "Review",
+    "title": "Folders in the library that are not managed",
+    "intro": "These folders sit in the library but no skill record points at them. Adopting one makes it a local skill in place: its files are not copied, moved or changed.",
+    "warningTitle": "What adopting cannot bring back",
+    "warningLost": "The folder becomes a new skill with a new id. Its old id, source, baseline, pin, change notes and watched upstreams are gone for good, and it starts with no tags, presets or deployments.",
+    "warningSource": "To link it to git again, use `skills set-source` in the CLI. The baseline is then upstream's current revision, not the one the folder came from, so which changes were local can no longer be told apart. set-source refuses when the folder differs from upstream (--force replaces it with upstream's copy), so check with --dry-run first; afterwards `skills diff --upstream` compares the skill with upstream.",
+    "adopt": "Adopt",
+    "adopted": "Adopted {{name}} as a local skill",
+    "adoptFailed": "Could not adopt the folder",
+    "noSkillMd": "no SKILL.md",
+    "noSkillMdHint": "Only a folder with a SKILL.md can be adopted. Add one, or move the folder out of the library."
+  },
   "mySkills": {
     "title": "Library",
     "applyToDefault": "Apply Preset",
