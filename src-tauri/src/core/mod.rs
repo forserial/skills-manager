@@ -12,6 +12,7 @@ pub mod crypto;
 pub mod error;
 pub mod evaluation;
 pub mod evaluation_incoming;
+pub(crate) mod fail_points; // sm-69q.20
 pub mod file_manager;
 pub mod fork_files;
 pub mod fork_schema;
@@ -39,6 +40,7 @@ pub mod scanner;
 pub mod scenario_service;
 pub mod skill_auto_updater;
 pub mod skill_metadata;
+pub(crate) mod skill_placement; // sm-69q.19 / sm-69q.20
 pub mod skill_store;
 pub mod skill_update_merge;
 pub mod skillssh_api;
@@ -49,3 +51,5 @@ pub mod tool_adapters;
 pub mod tool_service;
 pub mod watched_upstreams;
 pub mod well_known;
+#[cfg(test)]
+mod write_order_tests; // sm-69q.19 / sm-69q.20

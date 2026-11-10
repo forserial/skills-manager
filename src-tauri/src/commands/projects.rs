@@ -53,7 +53,7 @@ pub struct ProjectAgentTargetDto {
     pub is_custom: bool,
 }
 
-fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
+pub(crate) fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
     let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for adapter in tool_adapters::all_tool_adapters(store) {
         let project_dir = adapter.project_relative_skills_dir().to_string();
@@ -101,7 +101,7 @@ fn linked_workspace_agent_name(rec: &ProjectRecord) -> String {
         .unwrap_or_else(|| rec.name.clone())
 }
 
-fn read_workspace_skills(
+pub(crate) fn read_workspace_skills(
     rec: &ProjectRecord,
     configs: &[project_scanner::AgentSkillConfig],
 ) -> Vec<project_scanner::ProjectSkillInfo> {
@@ -982,92 +982,93 @@ pub async fn import_project_skill_to_center(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let configs = agent_skill_configs(&store);
-        let skills = read_workspace_skills(&record, &configs);
-        let skill = skills
-            .iter()
-            .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
-            .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
-
-        let source_path = PathBuf::from(&skill.path);
-        let all_managed = store.get_all_skills().unwrap_or_default();
-        // Use the same matching logic as the UI (find_best_center_match) to
-        // stay consistent with sync-status display. After updating, bind
-        // source_ref so future imports match by exact path.
-        if let Some(existing) = find_best_center_match(skill, &all_managed) {
-            let result = installer::install_from_local_to_destination(
-                &source_path,
-                Some(&existing.name),
-                Path::new(&existing.central_path),
-            )
-            .map_err(AppError::io)?;
-            store
-                .update_skill_after_install(
-                    &existing.id,
-                    &existing.name,
-                    result.description.as_deref(),
-                    existing.source_revision.as_deref(),
-                    existing.remote_revision.as_deref(),
-                    Some(&result.content_hash),
-                    "local_only",
-                )
-                .map_err(AppError::db)?;
-            // Only update source_ref when the match was already by source_ref
-            // path (not by hash or name). This avoids permanently rebinding
-            // unrelated center skills that merely share a name or content.
-            let already_matched_by_ref = source_ref_matches_skill_path(
-                &skill.path,
-                std::fs::canonicalize(&skill.path).ok().as_ref(),
-                existing,
-            );
-            if existing.source_type == "local" && already_matched_by_ref {
-                store
-                    .update_skill_source_ref(&existing.id, &skill.path)
-                    .map_err(AppError::db)?;
-            }
-            return Ok(());
-        }
-
-        let result =
-            installer::install_from_local(&source_path, Some(&skill.name)).map_err(AppError::io)?;
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let id = uuid::Uuid::new_v4().to_string();
-
-        let skill_record = SkillRecord {
-            id: id.clone(),
-            name: result.name.clone(),
-            description: result.description.clone(),
-            source_type: "local".to_string(),
-            source_ref: Some(skill.path.clone()),
-            source_ref_resolved: None,
-            source_subpath: None,
-            source_branch: None,
-            source_revision: None,
-            remote_revision: None,
-            central_path: result.central_path.to_string_lossy().to_string(),
-            content_hash: Some(result.content_hash.clone()),
-            enabled: true,
-            created_at: now,
-            updated_at: now,
-            status: "ok".to_string(),
-            update_status: "local_only".to_string(),
-            last_checked_at: Some(now),
-            last_check_error: None,
-        };
-
-        store.insert_skill(&skill_record).map_err(AppError::db)?;
-
-        Ok(())
+        import_project_skill_blocking(&store, &project_id, &skill_relative_path, &agent)
     })
     .await?
+}
+
+/// The body of [`import_project_skill_to_center`], callable without Tauri state.
+pub(crate) fn import_project_skill_blocking(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(), AppError> {
+    ensure_safe_skill_relative_path(&skill_relative_path)?;
+    // The copy, the record and its metadata file are written together, like
+    // every other install (sm-69q.19).
+    let _lock = crate::core::repo_lock::RepoLock::acquire_foreground("import project skill")
+        .map_err(AppError::db)?;
+
+    let record = store
+        .get_project_by_id(&project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let configs = agent_skill_configs(&store);
+    let skills = read_workspace_skills(&record, &configs);
+    let skill = skills
+        .iter()
+        .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
+        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+
+    let source_path = PathBuf::from(&skill.path);
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    // Use the same matching logic as the UI (find_best_center_match) to
+    // stay consistent with sync-status display. After updating, bind
+    // source_ref so future imports match by exact path.
+    if let Some(existing) = find_best_center_match(skill, &all_managed) {
+        let result = installer::install_from_local_to_destination(
+            &source_path,
+            Some(&existing.name),
+            Path::new(&existing.central_path),
+        )
+        .map_err(AppError::io)?;
+        store
+            .update_skill_after_install(
+                &existing.id,
+                &existing.name,
+                result.description.as_deref(),
+                existing.source_revision.as_deref(),
+                existing.remote_revision.as_deref(),
+                Some(&result.content_hash),
+                "local_only",
+            )
+            .map_err(AppError::db)?;
+        // Only update source_ref when the match was already by source_ref
+        // path (not by hash or name). This avoids permanently rebinding
+        // unrelated center skills that merely share a name or content.
+        let already_matched_by_ref = source_ref_matches_skill_path(
+            &skill.path,
+            std::fs::canonicalize(&skill.path).ok().as_ref(),
+            existing,
+        );
+        if existing.source_type == "local" && already_matched_by_ref {
+            store
+                .update_skill_source_ref(&existing.id, &skill.path)
+                .map_err(AppError::db)?;
+        }
+        crate::core::skill_placement::write_skill_metadata_unlocked(store, &existing.id)
+            .map_err(AppError::db)?;
+        return Ok(());
+    }
+
+    let result =
+        installer::install_from_local(&source_path, Some(&skill.name)).map_err(AppError::io)?;
+    // The shared install path writes the record and its metadata file; without
+    // the metadata the next startup reindex drops the record (sm-69q.19).
+    let metadata = super::skills::InstallSourceMetadata {
+        source_type: "local".to_string(),
+        source_ref: Some(skill.path.clone()),
+        source_ref_resolved: None,
+        source_subpath: None,
+        source_branch: None,
+        source_revision: None,
+        remote_revision: None,
+        update_status: "local_only".to_string(),
+    };
+    super::skills::store_installed_skill_unlocked(store, &result, &metadata, None)?;
+    Ok(())
 }
 
 #[tauri::command]

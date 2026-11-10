@@ -12,6 +12,9 @@ pub struct InstallResult {
     pub description: Option<String>,
     pub central_path: PathBuf,
     pub content_hash: String,
+    /// Nothing was at `central_path` before this install put the folder there,
+    /// so undoing the install may remove it (sm-69q.20).
+    pub created_folder: bool,
 }
 
 enum PreparedSource {
@@ -175,26 +178,28 @@ pub fn install_skill_dir_to_destination(
                 description: meta.description,
                 central_path: destination.to_path_buf(),
                 content_hash: hash,
+                created_folder: false,
             });
         }
     }
 
     sync_engine::ensure_dst_not_inside_src(source, destination)?;
 
-    if destination.exists() {
-        std::fs::remove_dir_all(destination)
-            .with_context(|| format!("Failed to remove existing {:?}", destination))?;
-    }
-
-    copy_skill_dir(source, destination)?;
-
-    let hash = content_hash::hash_directory(destination)?;
+    // Copy and hash a staged folder beside `destination`, then move it into
+    // place: a failed copy no longer leaves a partial skill, and an existing
+    // folder survives one (sm-69q.20).
+    let (hash, created_folder) = super::skill_placement::place_copy(destination, |staged| {
+        copy_skill_dir(source, staged)?;
+        content_hash::hash_directory(staged)
+    })
+    .with_context(|| format!("Failed to install into {:?}", destination))?;
 
     Ok(InstallResult {
         name: name.to_string(),
         description: meta.description,
         central_path: destination.to_path_buf(),
         content_hash: hash,
+        created_folder,
     })
 }
 

@@ -229,7 +229,7 @@ pub async fn import_global_local_skill_to_center(
     .await?
 }
 
-fn import_agent_local_skill_to_center(
+pub(crate) fn import_agent_local_skill_to_center(
     store: &SkillStore,
     agent: &str,
     skill_relative_path: &str,
@@ -317,20 +317,29 @@ fn import_agent_local_skill_to_center(
         last_check_error: None,
     };
 
-    store.insert_skill(&skill_record).map_err(AppError::db)?;
+    crate::core::skill_placement::register_new_skill_unlocked(
+        store,
+        &skill_record,
+        result.created_folder,
+    )
+    .map_err(AppError::db)?;
     // Register the managed sync target (see note above). On failure, drop the
     // just-inserted skill row (which cascades to any target) so we never leave
-    // an orphaned, button-less skill behind. We deliberately do NOT delete the
-    // central directory: `install_from_local` may have de-duplicated onto a
-    // directory shared with another skill, and removing it could corrupt that
-    // skill — an orphaned dir is harmless by comparison.
+    // an orphaned, button-less skill behind. The central directory goes too
+    // when this import created it; one `install_from_local` de-duplicated
+    // onto (shared with another skill) is kept (sm-69q.20).
     if let Err(err) = scenario_service::sync_single_skill_to_tool(
         store,
         &skill_record.id,
         agent,
         scenario_service::DeployIntent::AdoptExisting(&source_path),
     ) {
-        let _ = store.delete_skill(&skill_record.id);
+        crate::core::skill_placement::undo_new_install(
+            store,
+            Some(&skill_record.id),
+            &result.central_path,
+            result.created_folder,
+        );
         return Err(err);
     }
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::io)
