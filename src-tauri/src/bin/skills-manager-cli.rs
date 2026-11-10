@@ -2916,7 +2916,20 @@ fn run_remove(
 
     let result = cmd::delete_managed_skills_by_ids(store, &ids).map_err(map_app_err)?;
     for missing in result.failed {
-        failed.push(format!("{missing}: not found"));
+        match result.failure_reasons.iter().find(|f| f.skill_id == missing) {
+            Some(kept) => failed.push(format!("{missing}: {}", kept.reason)),
+            None => failed.push(format!("{missing}: not found")),
+        }
+    }
+    // sm-69q.21: a skill kept because its folder could not be moved is an error
+    // (exit 1), not a quiet entry in an `ok: true` report.
+    if !result.failure_reasons.is_empty() {
+        bail!(
+            "removed {}, kept {}: {}",
+            result.deleted,
+            result.failure_reasons.len(),
+            failed.join("; ")
+        );
     }
     Ok(RemoveReport {
         ok: true,

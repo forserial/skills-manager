@@ -261,6 +261,8 @@ export const deleteManagedSkill = (skillId: string) =>
 export interface BatchDeleteSkillsResult {
   deleted: number;
   failed: string[];
+  /** Why a skill was kept instead of deleted (sm-69q.21). */
+  failure_reasons?: { skill_id: string; reason: string }[];
 }
 
 export interface InstallLocalResult {

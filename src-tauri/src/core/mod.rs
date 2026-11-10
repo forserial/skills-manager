@@ -14,6 +14,7 @@ pub mod evaluation;
 pub mod evaluation_incoming;
 pub mod file_manager;
 pub mod fork_files;
+pub mod folder_retire; // sm-69q.21
 pub mod fork_schema;
 pub mod file_watcher;
 pub mod git2_engine;

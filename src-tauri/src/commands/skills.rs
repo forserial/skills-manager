@@ -233,6 +233,8 @@ pub struct BatchUpdateSkillsResult {
 pub struct BatchDeleteSkillsResult {
     pub deleted: usize,
     pub failed: Vec<String>,
+    /// Why a skill was kept rather than deleted (sm-69q.21).
+    pub failure_reasons: Vec<crate::core::folder_retire::DeleteFailure>,
 }
 
 #[derive(Debug, Serialize)]
@@ -787,7 +789,10 @@ pub async fn delete_managed_skill(
     tauri::async_runtime::spawn_blocking(move || {
         let result = delete_managed_skills_by_ids(&store, &[skill_id.clone()])?;
         if result.deleted == 0 {
-            return Err(AppError::not_found("Skill not found"));
+            return Err(crate::core::folder_retire::single_delete_error(
+                &skill_id,
+                &result.failure_reasons,
+            ));
         }
         Ok(())
     })
@@ -811,6 +816,7 @@ pub fn delete_managed_skills_by_ids(
     sync_metadata::with_repo_lock("delete skills", || {
         let mut deleted = 0;
         let mut failed = Vec::new();
+        let mut failure_reasons = Vec::new();
 
         for skill_id in skill_ids {
             let Some(skill) = store.get_skill_by_id(skill_id)? else {
@@ -823,6 +829,22 @@ pub fn delete_managed_skills_by_ids(
                 continue;
             };
 
+            // sm-69q.21: move the folder out first; if that fails nothing has changed.
+            let central = PathBuf::from(&skill.central_path);
+            let retired = match crate::core::folder_retire::retire(&central) {
+                Ok(retired) => retired,
+                Err(e) => {
+                    failed.push(skill_id.clone());
+                    failure_reasons.push(crate::core::folder_retire::kept_failure(
+                        store,
+                        skill_id,
+                        &skill.name,
+                        &e,
+                    ));
+                    continue;
+                }
+            };
+
             let targets = store.get_targets_for_skill(skill_id)?;
             for target in &targets {
                 sync_engine::remove_recorded_target_or_warn(
@@ -831,12 +853,11 @@ pub fn delete_managed_skills_by_ids(
                 );
             }
 
-            let central = PathBuf::from(&skill.central_path);
-            if central.exists() {
-                std::fs::remove_dir_all(&central).ok();
+            if let Err(e) = store.delete_skill(skill_id) {
+                retired.restore();
+                return Err(e);
             }
-
-            store.delete_skill(skill_id)?;
+            retired.discard();
             crate::core::fork_files::remove_all_for_unlocked(skill_id)?;
             crate::core::baseline::forget_base_content(skill_id);
             crate::core::skill_update_merge::cleanup::forget(skill_id);
@@ -852,7 +873,11 @@ pub fn delete_managed_skills_by_ids(
             sync_metadata::write_all_from_db_unlocked(store)?;
         }
 
-        Ok(BatchDeleteSkillsResult { deleted, failed })
+        Ok(BatchDeleteSkillsResult {
+            deleted,
+            failed,
+            failure_reasons,
+        })
     })
     .map_err(AppError::db)
 }
