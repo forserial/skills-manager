@@ -66,9 +66,22 @@ export interface EvaluationRecord {
   result: EvaluationResult | null;
   report_md: string | null;
   error: string | null;
-  /** The skill's content changed since this run. */
+  /** The skill's content changed since this run. An incoming run is stale
+   *  until its update is applied. */
   stale: boolean;
+  /** The upstream commit the judged files came from (sm-69q.10); null for
+   *  older runs and skills without an upstream. */
+  source_revision: string | null;
+  /** The skill's baseline revision when the run started (sm-69q.10). */
+  baseline_revision: string | null;
+  /** What the run judged: the library copy, or the version an update would
+   *  install (sm-69q.10). */
+  subject: EvaluationSubject;
+  /** The newest upstream revision known for the skill now (sm-69q.10). */
+  upstream_revision: string | null;
 }
+
+export type EvaluationSubject = "library" | "incoming";
 
 /** The latest successful evaluation of one skill. */
 export interface EvaluationSummary {
@@ -88,6 +101,9 @@ export interface EvaluateOptions {
   model?: string | null;
   timeout_secs?: number | null;
   budget_usd?: number | null;
+  /** Judge the version an update would install, staged outside the library
+   *  (sm-69q.10). */
+  incoming?: boolean;
 }
 
 export interface AgentRunnerInfo {

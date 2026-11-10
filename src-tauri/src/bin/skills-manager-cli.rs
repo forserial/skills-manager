@@ -311,8 +311,14 @@ enum SkillsCommand {
         /// Model passed to the agent (default: the eval_model setting, else the agent's own)
         #[arg(long)]
         model: Option<String>,
+        /// Evaluate the version an update would install (upstream's head, with local
+        /// changes merged), staged outside the library; the library is not changed.
+        /// Prints the run with `incoming` details and the latest library run.
+        #[arg(long)]
+        incoming: bool,
     },
-    /// List a skill's stored evaluations, newest first, each with a stale flag.
+    /// List a skill's stored evaluations, newest first, each with a stale flag
+    /// and the upstream revision each run judged.
     Evaluations {
         /// Skill ref (id / name / dir basename / central path)
         reference: String,
@@ -1347,6 +1353,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             agent,
             evaluator,
             model,
+            incoming,
         } => {
             let skill = resolve_skill(store, &reference)?;
             let opts = evaluation::EvaluateOptions {
@@ -1355,6 +1362,19 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
                 model,
                 ..Default::default()
             };
+            if incoming {
+                // sm-69q.10
+                let run = app_lib::core::evaluation_incoming::evaluate_incoming(
+                    store,
+                    &skill.id,
+                    &opts,
+                    &Arc::new(AtomicBool::new(false)),
+                    &mut print_run_event,
+                )
+                .map_err(map_app_err)?;
+                print_json(&run, json);
+                return Ok(());
+            }
             let record = evaluation::evaluate_skill(
                 store,
                 &skill.id,
@@ -4416,11 +4436,23 @@ mod tests {
                     agent: Some(agent),
                     evaluator: Some(evaluator),
                     model: Some(model),
+                    incoming: false,
                 }
             }) if reference == "browser"
                 && agent == "claude_code"
                 && evaluator == "skill-judge"
                 && model == "sonnet"
+        ));
+
+        // sm-69q.10
+        let cli =
+            Cli::try_parse_from(["skills-manager-cli", "skills", "evaluate", "browser", "--incoming"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Skills(SkillsArgs {
+                command: SkillsCommand::Evaluate { incoming: true, .. }
+            })
         ));
 
         let cli =

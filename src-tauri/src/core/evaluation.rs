@@ -58,6 +58,9 @@ pub struct EvaluateOptions {
     pub model: Option<String>,
     pub timeout_secs: Option<u64>,
     pub budget_usd: Option<f64>,
+    /// Judge the version an update would install instead of the library
+    /// copy (sm-69q.10, [`crate::core::evaluation_incoming`]).
+    pub incoming: bool,
 }
 
 /// [`EvaluateOptions`] with every default applied.
@@ -344,6 +347,74 @@ impl EvaluationStatus {
     }
 }
 
+/// What a run judged (sm-69q.10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationSubject {
+    /// The skill's copy in the library.
+    Library,
+    /// The tree an update would install, staged outside the library.
+    Incoming,
+}
+
+impl EvaluationSubject {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Library => "library",
+            Self::Incoming => "incoming",
+        }
+    }
+
+    /// Rows stored before sm-69q.10 have no subject: they judged the library.
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("incoming") => Self::Incoming,
+            _ => Self::Library,
+        }
+    }
+}
+
+/// The directory a run judges and what it stands for. [`evaluate_skill`]
+/// builds the library one; [`crate::core::evaluation_incoming`] the incoming one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluationTarget {
+    pub dir: PathBuf,
+    pub subject: EvaluationSubject,
+    /// The upstream commit the judged files came from, when known.
+    pub source_revision: Option<String>,
+    /// The skill's baseline revision when the run started.
+    pub baseline_revision: Option<String>,
+    /// `hash_directory` of `dir`, compared with the library at read time.
+    pub content_hash: Option<String>,
+}
+
+impl EvaluationTarget {
+    /// The library copy of `skill`, at the revisions recorded for it now.
+    pub fn library(skill: &SkillRecord) -> Result<Self, AppError> {
+        Ok(Self {
+            dir: skill_dir(skill)?,
+            subject: EvaluationSubject::Library,
+            source_revision: skill.source_revision.clone(),
+            baseline_revision: current_baseline_revision(&skill.id),
+            // What the agent is about to read, hashed the way `stale` is
+            // computed at read time. `skill.content_hash` may predate an edit
+            // made on disk since the last reindex, and recording it would
+            // mark this run stale at once.
+            content_hash: live_content_hash(&skill.central_path, skill.content_hash.clone()),
+        })
+    }
+}
+
+/// The revision of `skill_id`'s baseline, `None` when it has none or it
+/// cannot be read (an evaluation does not fail for want of it).
+pub fn current_baseline_revision(skill_id: &str) -> Option<String> {
+    crate::core::baseline::load(skill_id)
+        .map_err(|e| log::warn!("could not read the baseline of {skill_id}: {e:#}"))
+        .ok()
+        .flatten()
+        .map(|baseline| baseline.revision)
+}
+
 /// One evaluation run, as the app records it. Everything except `result` is
 /// produced by the app, not the model.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -373,8 +444,19 @@ pub struct EvaluationRecord {
     pub report_md: Option<String>,
     pub error: Option<String>,
     /// Computed at read time: the skill directory's content hash, read from
-    /// disk now, differs from `skill_content_hash`.
+    /// disk now, differs from `skill_content_hash`. An incoming run reads
+    /// stale until its update is applied and the library holds what it judged.
     pub stale: bool,
+    /// The upstream commit the judged files came from (sm-69q.10). `None`
+    /// for runs stored before it, and for skills without an upstream.
+    pub source_revision: Option<String>,
+    /// The skill's baseline revision when the run started (sm-69q.10).
+    pub baseline_revision: Option<String>,
+    pub subject: EvaluationSubject,
+    /// Computed at read time: the newest upstream revision the app knows for
+    /// the skill now (the last check's, else the installed one). Differs
+    /// from `source_revision` once the skill has moved on.
+    pub upstream_revision: Option<String>,
 }
 
 /// The latest successful evaluation of one skill, for list badges.
@@ -417,22 +499,30 @@ pub fn evaluate_skill(
     cancel: &Arc<AtomicBool>,
     on_event: &mut dyn FnMut(RunEvent),
 ) -> Result<EvaluationRecord, AppError> {
+    if opts.incoming {
+        return crate::core::evaluation_incoming::evaluate_incoming(
+            store, skill_id, opts, cancel, on_event,
+        )
+        .map(|run| run.evaluation);
+    }
+    evaluate_skill_target(store, skill_id, opts, None, cancel, on_event)
+}
+
+/// [`evaluate_skill`] of `target`, or of the library copy when `None`.
+pub(crate) fn evaluate_skill_target(
+    store: &SkillStore,
+    skill_id: &str,
+    opts: &EvaluateOptions,
+    target: Option<EvaluationTarget>,
+    cancel: &Arc<AtomicBool>,
+    on_event: &mut dyn FnMut(RunEvent),
+) -> Result<EvaluationRecord, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found(format!("Skill not found: {skill_id}")))?;
 
-    let prepared = opts.resolve(store).and_then(|opts| {
-        let adapter = registry::adapter_for(&opts.agent).ok_or_else(|| {
-            let known: Vec<_> = registry::all_adapters().iter().map(|a| a.key()).collect();
-            AppError::invalid_input(format!(
-                "Unknown agent \"{}\". Known agents: {}.",
-                opts.agent,
-                known.join(", ")
-            ))
-        })?;
-        Ok((opts, adapter))
-    });
+    let prepared = resolve_agent(store, opts);
     let (opts, adapter) = match prepared {
         Ok(prepared) => prepared,
         Err(err) => {
@@ -446,6 +536,7 @@ pub fn evaluate_skill(
     evaluate_with(
         store,
         &skill,
+        target,
         &opts,
         adapter.as_ref(),
         &context,
@@ -455,11 +546,31 @@ pub fn evaluate_skill(
     )
 }
 
+/// The options with defaults applied, and the adapter they name.
+pub(crate) fn resolve_agent(
+    store: &SkillStore,
+    opts: &EvaluateOptions,
+) -> Result<(ResolvedOptions, Box<dyn AgentAdapter>), AppError> {
+    opts.resolve(store).and_then(|opts| {
+        let adapter = registry::adapter_for(&opts.agent).ok_or_else(|| {
+            let known: Vec<_> = registry::all_adapters().iter().map(|a| a.key()).collect();
+            AppError::invalid_input(format!(
+                "Unknown agent \"{}\". Known agents: {}.",
+                opts.agent,
+                known.join(", ")
+            ))
+        })?;
+        Ok((opts, adapter))
+    })
+}
+
 /// [`evaluate_skill`] once the agent is chosen. Writes the audit entry.
+/// `target` `None` judges the library copy.
 #[allow(clippy::too_many_arguments)]
-fn evaluate_with(
+pub(crate) fn evaluate_with(
     store: &SkillStore,
     skill: &SkillRecord,
+    target: Option<EvaluationTarget>,
     opts: &ResolvedOptions,
     adapter: &dyn AgentAdapter,
     context: &RunContext,
@@ -468,10 +579,15 @@ fn evaluate_with(
     on_event: &mut dyn FnMut(RunEvent),
 ) -> Result<EvaluationRecord, AppError> {
     let outcome = run_and_record(
-        store, skill, opts, adapter, context, work_root, cancel, on_event,
+        store, skill, target, opts, adapter, context, work_root, cancel, on_event,
     );
     audit(store, skill, Some(adapter.key()), &outcome.as_ref());
     outcome
+}
+
+/// The audit entry of a run that failed before reaching the agent.
+pub(crate) fn audit_failure(store: &SkillStore, skill: &SkillRecord, err: &AppError) {
+    audit(store, skill, None, &Err(err));
 }
 
 fn audit(
@@ -487,6 +603,11 @@ fn audit(
     let draft = match outcome {
         Ok(record) => {
             let mut detail = format!("evaluator {}", record.evaluator);
+            if record.subject == EvaluationSubject::Incoming {
+                let revision = record.source_revision.as_deref().unwrap_or("unknown");
+                let short: String = revision.chars().take(12).collect();
+                detail.push_str(&format!(", incoming update at {short}"));
+            }
             if let Some(result) = &record.result {
                 if let Some(grade) = &result.grade {
                     detail.push_str(&format!(", grade {grade}"));
@@ -600,6 +721,7 @@ fn now_ms() -> i64 {
 fn run_and_record(
     store: &SkillStore,
     skill: &SkillRecord,
+    target: Option<EvaluationTarget>,
     opts: &ResolvedOptions,
     adapter: &dyn AgentAdapter,
     context: &RunContext,
@@ -608,7 +730,11 @@ fn run_and_record(
     on_event: &mut dyn FnMut(RunEvent),
 ) -> Result<EvaluationRecord, AppError> {
     let evaluator = find_evaluator(store, &opts.evaluator)?;
-    let target_dir = skill_dir(skill)?;
+    let target = match target {
+        Some(target) => target,
+        None => EvaluationTarget::library(skill)?,
+    };
+    let target_dir = target.dir.clone();
     let evaluator_dir = skill_dir(&evaluator)?;
     let evaluator_md = skill_md_in(&evaluator_dir, &evaluator.name)?;
 
@@ -628,10 +754,6 @@ fn run_and_record(
         budget_usd: opts.budget_usd,
     };
 
-    // What the agent is about to read, hashed the way `stale` is computed at
-    // read time. `skill.content_hash` may predate an edit made on disk since
-    // the last reindex, and recording it would mark this run stale at once.
-    let skill_content_hash = live_content_hash(&skill.central_path, skill.content_hash.clone());
     let started_at = now_ms();
     let clock = Instant::now();
     // The runner's error drops the failure kind and the spend; its final
@@ -683,7 +805,7 @@ fn run_and_record(
     let mut record = EvaluationRecord {
         id: uuid::Uuid::now_v7().to_string(),
         skill_id: skill.id.clone(),
-        skill_content_hash,
+        skill_content_hash: target.content_hash,
         evaluator: evaluator.name.clone(),
         evaluator_content_hash: evaluator.content_hash.clone(),
         agent: adapter.key().to_string(),
@@ -697,15 +819,18 @@ fn run_and_record(
         result,
         error,
         stale: false,
+        source_revision: target.source_revision,
+        baseline_revision: target.baseline_revision,
+        subject: target.subject,
+        upstream_revision: None,
     };
     store.insert_evaluation(&record).map_err(AppError::db)?;
     drop(work);
 
     // The skill may have been edited, or deleted, while the agent ran.
-    record.stale = store
-        .get_evaluation(&record.id)
-        .map_err(AppError::db)?
-        .map_or(true, |stored| stored.stale);
+    let stored = store.get_evaluation(&record.id).map_err(AppError::db)?;
+    record.stale = stored.as_ref().map_or(true, |stored| stored.stale);
+    record.upstream_revision = stored.and_then(|stored| stored.upstream_revision);
 
     if record.status == EvaluationStatus::Succeeded {
         return Ok(record);
@@ -855,6 +980,7 @@ mod tests {
             model: Some("sonnet".into()),
             timeout_secs: None,
             budget_usd: None,
+            incoming: false,
         }
         .resolve(&store)
         .unwrap();
@@ -1011,6 +1137,7 @@ mod tests {
         evaluate_with(
             &f.store,
             &f.target,
+            None,
             &options(),
             agent,
             &context,
@@ -1097,6 +1224,57 @@ mod tests {
         assert!(audit[0].success);
         assert_eq!(audit[0].skill_id.as_deref(), Some("id-target-skill"));
         assert_eq!(audit[0].tool.as_deref(), Some("fake_agent"));
+    }
+
+    #[test]
+    fn a_stored_run_reports_the_revision_it_judged_and_when_upstream_moved_on() {
+        let f = fixture(true);
+        let installed = "1111111111111111111111111111111111111111";
+        let checked = "2222222222222222222222222222222222222222";
+        f.store
+            .update_skill_source_metadata(
+                &f.target.id,
+                Some("https://x.invalid/r"),
+                None,
+                None,
+                Some(installed),
+            )
+            .unwrap();
+        let target = f.store.get_skill_by_id(&f.target.id).unwrap().unwrap();
+        assert_eq!(target.source_revision.as_deref(), Some(installed));
+        let agent = fake(emit_script(&f.scripts, &result_line(&minimal(), 0.1), 0));
+        let context = RunContext {
+            binary_override: Some(shell_path()),
+            proxy_url: None,
+        };
+        let record = evaluate_with(
+            &f.store,
+            &target,
+            None,
+            &options(),
+            &agent,
+            &context,
+            &f.work_root,
+            &Arc::new(AtomicBool::new(false)),
+            &mut |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(record.subject, EvaluationSubject::Library);
+        assert_eq!(record.source_revision.as_deref(), Some(installed));
+        assert_eq!(record.upstream_revision.as_deref(), Some(installed));
+        let json = serde_json::to_value(&record).unwrap();
+        assert_eq!(json["source_revision"], json!(installed));
+        assert_eq!(json["subject"], json!("library"));
+        assert!(json.as_object().unwrap().contains_key("baseline_revision"));
+
+        // A check finds upstream has moved: the run still names what it judged.
+        f.store
+            .update_skill_check_state(&target.id, Some(checked), "update_available", None)
+            .unwrap();
+        let stored = &f.store.list_evaluations(&target.id).unwrap()[0];
+        assert_eq!(stored.source_revision.as_deref(), Some(installed));
+        assert_eq!(stored.upstream_revision.as_deref(), Some(checked));
     }
 
     #[test]

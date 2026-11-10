@@ -36,6 +36,12 @@ import {
   type SeverityGroupKey,
 } from "../lib/evaluation";
 import { SkillMarkdown } from "./SkillMarkdown";
+import { canEvaluateIncoming, isIncomingRun, runsBySubject, shortSha } from "../lib/evaluationRevisions";
+import {
+  EvaluateUpdateButton,
+  EvaluationRevisionLine,
+  IncomingEvaluationComparison,
+} from "./EvaluationRevisions";
 
 const SEVERITY_CLASS: Record<SeverityGroupKey, string> = {
   critical: "bg-red-500/10 text-red-600 dark:text-red-400",
@@ -163,14 +169,17 @@ export function SkillEvaluationSection({ skill }: { skill: ManagedSkill }) {
   const judgePresent = hasSkillJudge(managedSkills);
 
   const latest = records?.[0] ?? null;
-  const latestSucceeded = records?.find((record) => record.status === "succeeded") ?? null;
+  // sm-69q.10: a run of an update not applied yet is shown beside, not as, the latest result.
+  const bySubject = runsBySubject(records);
+  const latestSucceeded = bySubject.library;
   const lastRunFailed = !active && latest && latest.status !== "succeeded" ? latest : null;
 
-  const handleEvaluate = () => {
+  const handleEvaluate = (incoming = false) => {
     setExpanded(true);
     startEvaluation(skill.id, {
       agent: agent || null,
       evaluator: evaluator || null,
+      ...(incoming ? { incoming: true } : {}),
     });
   };
 
@@ -223,6 +232,7 @@ export function SkillEvaluationSection({ skill }: { skill: ManagedSkill }) {
             {t("evaluation.title")}
           </span>
           {!active && summary?.stale && <StalePill title={t("evaluation.staleHint")} />}
+          {!active && latestSucceeded && <EvaluationRevisionLine record={latestSucceeded} />}
         </span>
         <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-muted">
           <span>{expanded ? t("evaluation.collapse") : t("evaluation.expand")}</span>
@@ -302,13 +312,19 @@ export function SkillEvaluationSection({ skill }: { skill: ManagedSkill }) {
             ) : (
               <button
                 type="button"
-                onClick={handleEvaluate}
+                onClick={() => handleEvaluate()}
                 disabled={!evaluator || !agent}
                 className="app-button-primary h-[34px] gap-1.5 px-3 py-0"
               >
                 <Play className="h-3.5 w-3.5" />
                 {t("evaluation.evaluate")}
               </button>
+            )}
+            {!active && canEvaluateIncoming(skill) && (
+              <EvaluateUpdateButton
+                onClick={() => handleEvaluate(true)}
+                disabled={!evaluator || !agent}
+              />
             )}
           </div>
           {selectedRunner && !selectedRunner.binary && (
@@ -358,6 +374,10 @@ export function SkillEvaluationSection({ skill }: { skill: ManagedSkill }) {
                 error: lastRunFailed.error ?? "",
               })}
             </p>
+          )}
+
+          {bySubject.incoming?.result && (
+            <IncomingEvaluationComparison library={latestSucceeded} incoming={bySubject.incoming} />
           )}
 
           {latestSucceeded?.result && (
@@ -410,6 +430,7 @@ function EvaluationResultView({
         <span className="text-[12px] text-muted">
           {new Date(record.finished_at).toLocaleString()}
         </span>
+        <EvaluationRevisionLine record={record} />
       </div>
       {record.stale && <p className="text-[12px] text-muted">{t("evaluation.staleHint")}</p>}
       <p className="text-[13px] leading-6 text-secondary">{result.verdict}</p>
@@ -554,7 +575,15 @@ function EvaluationHistory({
                     {[record.result?.grade, score].filter(Boolean).join(" · ")}
                   </span>
                 )}
-                {succeeded && record.stale && <StalePill title={t("evaluation.staleHint")} />}
+                {isIncomingRun(record) ? (
+                  <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+                    {t("evaluationRevisions.historyIncoming", {
+                      sha: shortSha(record.source_revision) ?? "?",
+                    })}
+                  </span>
+                ) : (
+                  succeeded && record.stale && <StalePill title={t("evaluation.staleHint")} />
+                )}
                 <span className="ml-auto flex items-center gap-3 text-muted">
                   <span>
                     {record.agent}

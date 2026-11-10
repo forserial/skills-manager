@@ -12,7 +12,9 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::content_hash;
-use super::evaluation::{EvaluationRecord, EvaluationResult, EvaluationStatus, EvaluationSummary};
+use super::evaluation::{
+    EvaluationRecord, EvaluationResult, EvaluationStatus, EvaluationSubject, EvaluationSummary,
+};
 use super::skill_store::SkillStore;
 
 /// Create the fork's tables when missing. Safe to call on every open.
@@ -45,6 +47,34 @@ pub fn ensure_fork_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_skill_evaluations_skill
             ON skill_evaluations(skill_id, started_at);",
     )?;
+    // sm-69q.10: which upstream revision a run judged, and whether it judged
+    // the library copy or the tree an update would install. Added to tables
+    // created before them; rows already there keep NULL (unknown, library).
+    for (column, decl) in EVALUATION_REVISION_COLUMNS {
+        add_column_if_missing(conn, "skill_evaluations", column, decl)?;
+    }
+    Ok(())
+}
+
+/// Columns sm-69q.10 adds to `skill_evaluations`, with their declarations.
+const EVALUATION_REVISION_COLUMNS: [(&str, &str); 3] = [
+    ("source_revision", "TEXT"),
+    ("baseline_revision", "TEXT"),
+    ("subject", "TEXT"),
+];
+
+/// `ALTER TABLE ... ADD COLUMN`, only when `table` lacks `column`. SQLite has
+/// no `ADD COLUMN IF NOT EXISTS`, so the column list is checked first.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    let present = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(column));
+    if !present {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
+    }
     Ok(())
 }
 
@@ -95,7 +125,13 @@ fn is_stale(recorded: &Option<String>, current: Option<&Option<String>>) -> bool
 const RECORD_COLUMNS: &str = "e.id, e.skill_id, e.skill_content_hash, e.evaluator,
     e.evaluator_content_hash, e.agent, e.model, e.status, e.started_at, e.finished_at,
     e.duration_ms, e.cost_usd, e.result_json, e.report_md, e.error,
-    s.central_path, s.content_hash";
+    s.central_path, s.content_hash,
+    e.source_revision, e.baseline_revision, e.subject,
+    COALESCE(s.remote_revision, s.source_revision)";
+
+/// Runs that judged the library copy: rows from before sm-69q.10 have no
+/// subject and are library runs.
+const LIBRARY_SUBJECT_SQL: &str = "COALESCE(latest.subject, 'library') = 'library'";
 
 /// A record with `stale` still unset, plus its skill's location.
 fn map_located(row: &rusqlite::Row<'_>) -> rusqlite::Result<(EvaluationRecord, SkillLocation)> {
@@ -147,6 +183,10 @@ fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvaluationRecord> {
         report_md: row.get(13)?,
         error: row.get(14)?,
         stale: false,
+        source_revision: row.get(17)?,
+        baseline_revision: row.get(18)?,
+        subject: EvaluationSubject::parse(row.get::<_, Option<String>>(19)?.as_deref()),
+        upstream_revision: row.get(20)?,
         id,
     })
 }
@@ -164,8 +204,10 @@ impl SkillStore {
             "INSERT INTO skill_evaluations (
                 id, skill_id, skill_content_hash, evaluator, evaluator_content_hash, agent,
                 model, status, started_at, finished_at, duration_ms, cost_usd, grade,
-                score_value, score_max, result_json, report_md, error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                score_value, score_max, result_json, report_md, error,
+                source_revision, baseline_revision, subject
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                       ?19, ?20, ?21)",
             params![
                 record.id,
                 record.skill_id,
@@ -185,6 +227,9 @@ impl SkillStore {
                 result_json,
                 record.report_md,
                 record.error,
+                record.source_revision,
+                record.baseline_revision,
+                record.subject.as_str(),
             ],
         )?;
         Ok(())
@@ -224,8 +269,10 @@ impl SkillStore {
         Ok(row.and_then(|row| with_stale(vec![row]).pop()))
     }
 
-    /// Per skill, the latest successful run: grade, score, stale flag.
-    /// Skills never evaluated successfully are absent.
+    /// Per skill, the latest successful run of the library copy: grade,
+    /// score, stale flag. Skills never evaluated successfully are absent.
+    /// Runs of an incoming update (sm-69q.10) judged a tree that is not in
+    /// the library, so they never stand for the skill on its card.
     ///
     /// Runs on every skill-list reload. The stale flag hashes each listed
     /// skill's directory, so the cost is O(evaluated skills), not O(library):
@@ -233,18 +280,19 @@ impl SkillStore {
     pub fn latest_evaluation_summaries(&self) -> Result<Vec<EvaluationSummary>> {
         let rows = {
             let conn = self.conn.lock().unwrap();
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare(&format!(
                 "SELECT e.skill_id, e.id, e.grade, e.score_value, e.score_max,
                         e.skill_content_hash, e.finished_at, s.central_path, s.content_hash
                  FROM skill_evaluations e JOIN skills s ON s.id = e.skill_id
                  WHERE e.id = (
                      SELECT latest.id FROM skill_evaluations latest
                      WHERE latest.skill_id = e.skill_id AND latest.status = 'succeeded'
+                       AND {LIBRARY_SUBJECT_SQL}
                      ORDER BY latest.started_at DESC, latest.id DESC
                      LIMIT 1
                  )
-                 ORDER BY e.skill_id",
-            )?;
+                 ORDER BY e.skill_id"
+            ))?;
             let rows = stmt.query_map([], |row| {
                 let recorded: Option<String> = row.get(5)?;
                 let summary = EvaluationSummary {
@@ -351,7 +399,109 @@ mod tests {
             result,
             error: (status != EvaluationStatus::Succeeded).then(|| "boom".to_string()),
             stale: false,
+            source_revision: None,
+            baseline_revision: None,
+            subject: EvaluationSubject::Library,
+            upstream_revision: None,
         }
+    }
+
+    fn column_names(conn: &Connection) -> Vec<String> {
+        conn.prepare("PRAGMA table_info(skill_evaluations)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    /// `skill_evaluations` exactly as sm-9dn created it, before sm-69q.10.
+    const PRE_REVISION_TABLE: &str = "CREATE TABLE skill_evaluations (
+        id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+        skill_content_hash TEXT, evaluator TEXT NOT NULL, evaluator_content_hash TEXT,
+        agent TEXT NOT NULL, model TEXT, status TEXT NOT NULL,
+        started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL,
+        cost_usd REAL, grade TEXT, score_value REAL, score_max REAL,
+        result_json TEXT, report_md TEXT, error TEXT
+    );";
+
+    #[test]
+    fn an_existing_table_gains_the_revision_columns_without_losing_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("test.db");
+        let store = SkillStore::new(&db).unwrap();
+        store.insert_skill(&skill("a", "h1")).unwrap();
+        drop(store);
+
+        // Turn the table back into the pre-sm-69q.10 shape, with one row.
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("DROP TABLE skill_evaluations;").unwrap();
+        conn.execute_batch(PRE_REVISION_TABLE).unwrap();
+        conn.execute(
+            "INSERT INTO skill_evaluations (id, skill_id, skill_content_hash, evaluator, agent,
+                 status, started_at, finished_at, duration_ms, grade)
+             VALUES ('old', 'a', 'h1', 'skill-judge', 'claude_code', 'succeeded', 1, 2, 1, 'B')",
+            [],
+        )
+        .unwrap();
+        assert!(!column_names(&conn).contains(&"source_revision".to_string()));
+        let version = user_version(&conn);
+        drop(conn);
+
+        // Opening the store runs ensure_fork_schema: the columns appear.
+        let store = SkillStore::new(&db).unwrap();
+        let rows = store.list_evaluations("a").unwrap();
+        assert_eq!(rows.len(), 1, "the old row survives");
+        assert_eq!(rows[0].id, "old");
+        assert_eq!(rows[0].source_revision, None);
+        assert_eq!(rows[0].baseline_revision, None);
+        assert_eq!(rows[0].subject, EvaluationSubject::Library);
+        assert_eq!(store.latest_evaluation_summaries().unwrap().len(), 1);
+        drop(store);
+
+        let conn = Connection::open(&db).unwrap();
+        let columns = column_names(&conn);
+        for column in ["source_revision", "baseline_revision", "subject"] {
+            assert_eq!(
+                columns.iter().filter(|c| *c == column).count(),
+                1,
+                "{columns:?}"
+            );
+        }
+        // A second start is a no-op.
+        ensure_fork_schema(&conn).unwrap();
+        assert_eq!(column_names(&conn), columns);
+        assert_eq!(user_version(&conn), version);
+        assert_eq!(version, 9);
+    }
+
+    #[test]
+    fn revisions_round_trip_and_incoming_runs_never_stand_for_the_library() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store.insert_skill(&skill("a", "h1")).unwrap();
+        let mut library = evaluation("lib", "a", "h1", 1, EvaluationStatus::Succeeded, "C");
+        library.source_revision = Some("rev-installed".into());
+        library.baseline_revision = Some("rev-base".into());
+        let mut incoming = evaluation("inc", "a", "h-new", 2, EvaluationStatus::Succeeded, "A");
+        incoming.source_revision = Some("rev-incoming".into());
+        incoming.subject = EvaluationSubject::Incoming;
+        store.insert_evaluation(&library).unwrap();
+        store.insert_evaluation(&incoming).unwrap();
+
+        let rows = store.list_evaluations("a").unwrap();
+        assert_eq!(rows[0].id, "inc");
+        assert_eq!(rows[0].subject, EvaluationSubject::Incoming);
+        assert_eq!(rows[0].source_revision.as_deref(), Some("rev-incoming"));
+        assert!(rows[0].stale, "the library does not hold the incoming tree");
+        assert_eq!(rows[1].source_revision.as_deref(), Some("rev-installed"));
+        assert_eq!(rows[1].baseline_revision.as_deref(), Some("rev-base"));
+        assert!(!rows[1].stale);
+
+        let summaries = store.latest_evaluation_summaries().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].evaluation_id, "lib");
     }
 
     fn user_version(conn: &Connection) -> u32 {

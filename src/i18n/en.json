@@ -1253,6 +1253,20 @@
       "base_unavailable": "Changed on both sides; upstream's earlier version could not be fetched now"
     }
   },
+  "evaluationRevisions": {
+    "evaluatedAt": "evaluated at {{sha}}",
+    "upstreamNow": "upstream is now at {{sha}}",
+    "evaluateUpdate": "Evaluate update",
+    "evaluateUpdateHint": "Evaluate the version an update would install, before applying it. Your local changes are merged in as an update would merge them; the library is not changed.",
+    "compareTitle": "Update compared",
+    "current": "Current version",
+    "currentAt": "Current version ({{sha}})",
+    "incoming": "Incoming update",
+    "incomingAt": "Incoming update ({{sha}})",
+    "noCurrentResult": "No successful evaluation of the current version yet.",
+    "notApplied": "The incoming result judged the version an update would install. The update has not been applied.",
+    "historyIncoming": "update {{sha}}"
+  },
   "evaluation": {
     "title": "Evaluation",
     "expand": "Show",
