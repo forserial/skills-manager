@@ -146,7 +146,7 @@ The field is omitted entirely when nothing is held back, so test for its presenc
 
 ### Local edits are not overwritten silently
 
-An edited file is no longer replaced without asking. When an update of a git or skills.sh skill would replace a library file that differs from its baseline (see [Baselines](#baselines)), it applies nothing and reports the files beside any removals:
+An edited file is never replaced without asking. `skills update <skill>` for one named skill merges local changes onto the new version (see [Merge on update](#merge-on-update)). Where it cannot merge (`--all`, the automatic updater, or a baseline that is unknown or suspect), an update that would replace a library file that differs from its baseline (see [Baselines](#baselines)) applies nothing and reports the files beside any removals:
 
 ```jsonc
 { "name": "ppt-master", "refreshed": false,
@@ -155,10 +155,42 @@ An edited file is no longer replaced without asking. When an update of a git or 
 ```
 
 - Handle it exactly like `held_back_removals`: the skill is untouched, it is not an error, don't retry. Both fields are omitted when empty. There is still no CLI flag to approve; the app's update dialog lists the edits in their own group and one confirmation covers both lists.
-- It holds even when upstream changed a *different* file, because the update would otherwise put upstream's old copy of the edited file back. Merging local edits onto the new version comes later. An edit that already matches upstream's new content is not held.
+- Without merging, it holds even when upstream changed a *different* file, because the update would otherwise put upstream's old copy of the edited file back. An edit that already matches upstream's new content is not held.
 - `held_back_reason` says why: `local_changes` (the listed files were edited, added or deleted locally), or, when the baseline cannot tell which files the user changed, every file the update would change is listed and the reason is `baseline_not_backfilled` (no baseline yet; `skills baseline rebuild` narrows the list), `baseline_unrecoverable` (no baseline and its revision is gone upstream, so a rebuild cannot help; approving takes upstream's version once) or `baseline_suspect` (a library sync conflict on the skill is pending; resolve it first).
 - `skills update --all`, the app's "update all" and the automatic updater (even with apply on) never approve: such skills are left alone and reported as held back.
 - **Limitation:** a device in the same sync group that runs an upstream build of Skills Manager does not know about baselines, so its updates still overwrite local edits (inferred, not tested).
+
+### Merge on update
+
+`skills update <skill>` for one named git or skills.sh skill with local changes merges them onto the new upstream version, file by file against the baseline:
+
+- a file changed on one side only takes that side's bytes, line endings included; a file only the library has (added locally) is carried over and needs no approval;
+- a text file changed on both sides is merged three-way (line endings are ignored while merging and the library file's CRLF is kept); when the edits clash it is a conflict;
+- a binary file changed on both sides, a file changed on one side and deleted on the other, and a file both sides added differently are conflicts;
+- a file deleted upstream and unchanged locally is still a removal, held for approval as above.
+
+A clean merge applies and reports what it merged; the baseline moves to the new revision (origin `merge`), so the edits remain local changes against it:
+
+```jsonc
+{ "name": "ppt-master", "refreshed": true, "merged": ["SKILL.md"] }
+```
+
+With conflicts **nothing is changed** and the update is held. The report lists them (`merge_conflicts: [{ path, kind, ... }]`), and a pending merge is kept outside the library (`<app data>/pending-merges/<id>/`, not synced):
+
+```bash
+"$SM" --json skills merge status <skill>      # conflicts, choices so far, and versions_dir per file
+"$SM" --json skills merge resolve <skill> SKILL.md --take local      # keep mine
+"$SM" --json skills merge resolve <skill> notes.md --take upstream   # take theirs
+"$SM" --json skills merge resolve <skill> notes.md --file fixed.md   # supply resolved content
+"$SM" --json skills merge apply <skill>       # finish the update with those choices
+"$SM" --json skills merge abort <skill>       # drop it; the library was never touched
+```
+
+- `kind` is `text`, `binary`, `deleted_upstream`, `deleted_locally`, `added_both`, `base_gone` (the baseline revision is gone upstream, so its content cannot be had: choose a version) or `base_unavailable` (the baseline content could not be fetched now: update again later, or choose a version).
+- `versions_dir` holds `<name>.mine.<ext>`, `<name>.theirs.<ext>` and, when known, `<name>.base.<ext>`. To hand-merge, edit a copy and pass it with `--file`; content that still has conflict markers is refused.
+- A choice binds the exact two versions it was made for. `merge apply` holds again, asking only about what changed, if upstream moved or the library file was edited since. Show the user each conflict and ask; never pick a side for them.
+- Merging needs a person: `skills update --all`, the app's "update all" and the automatic updater never merge, and a skill whose baseline is unknown or suspect is never merged (it holds as above).
+- In the app, the update shows "N files merged automatically, M need a decision" with keep mine, take theirs, or open both versions per file.
 
 ## Pin and review
 
@@ -502,7 +534,7 @@ The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are
 "$SM" skills update --all    # apply
 ```
 
-Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks. Skills with `held_back_removals` or `held_back_overwrites` were held for the user's decision; list the paths and say why.
+Report which skills actually refreshed (`refreshed: true` in the JSON) vs which were already up-to-date. Skills reported with `pinned: true` were skipped on purpose; mention them, and don't unpin them unless the user asks. Skills with `held_back_removals` or `held_back_overwrites` were held for the user's decision; list the paths and say why. `--all` never merges local changes: for a locally changed skill, offer `skills update <skill>`, which does.
 
 ## Pitfalls
 

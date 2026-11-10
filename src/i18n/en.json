@@ -1215,6 +1215,27 @@
       "baseline_suspect": "A library sync conflict on this skill is still pending, so the record of what upstream shipped may belong to another device. Every file the update would change is listed. Resolve the sync conflict first to see only your own edits."
     }
   },
+  "mergeUpdate": {
+    "title": "Some files need your decision",
+    "summary": "Updating {{name}} merged {{merged}} file(s) with your changes automatically; {{count}} need a decision. Nothing has changed yet.",
+    "baseMissing": "Skills Manager could not get what upstream shipped last time, so files changed on both sides could not be merged. Choose a version for each, or cancel and update again later.",
+    "conflictsGroup": "Files that need a decision",
+    "keepMine": "Keep mine",
+    "takeTheirs": "Take theirs",
+    "openBoth": "Open both versions",
+    "apply": "Apply and update",
+    "applied": "Skill updated; {{count}} file(s) merged with your changes",
+    "aborted": "Update cancelled; your files are unchanged",
+    "kind": {
+      "text": "Changed here and upstream, and the edits overlap",
+      "binary": "A binary file changed here and upstream",
+      "deleted_upstream": "Changed here, deleted upstream",
+      "deleted_locally": "Deleted here, changed upstream",
+      "added_both": "Added here and upstream with different content",
+      "base_gone": "Changed on both sides; upstream's earlier version is gone, so it cannot be merged",
+      "base_unavailable": "Changed on both sides; upstream's earlier version could not be fetched now"
+    }
+  },
   "evaluation": {
     "title": "Evaluation",
     "expand": "Show",

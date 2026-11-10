@@ -39,6 +39,7 @@ import { useSkillViewMode } from "../hooks/useSkillViewMode";
 import { useMultiSelect } from "../hooks/useMultiSelect";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HeldUpdateDialog } from "../components/HeldUpdateDialog";
+import { MergeConflictDialog } from "../components/MergeConflictDialog";
 import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
@@ -825,6 +826,12 @@ export function MySkills() {
     relinkSource?: string;
   } | null>(null);
 
+  /** An update held over merge conflicts (sm-69q.6). */
+  const [mergeHold, setMergeHold] = useState<{
+    skill: ManagedSkill;
+    report: api.MergeReport;
+  } | null>(null);
+
   const handleUpdateAvailableSkills = async () => {
     const updatableSkills = skills.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
@@ -914,6 +921,11 @@ export function MySkills() {
         toast.success(t("mySkills.updateActions.reimported"));
       } else {
         const result = await api.updateSkill(skill.id, approvedRemovals);
+        // Merged with conflicts (sm-69q.6): nothing was changed; ask per file.
+        if (result.merge && result.merge.conflicts.length > 0) {
+          setMergeHold({ skill, report: result.merge });
+          return;
+        }
         // Nothing was changed: the update would have taken away files the new
         // version does not have (#256), or replaced local edits (sm-69q.4).
         // Show them and let the user decide.
@@ -928,7 +940,10 @@ export function MySkills() {
           });
           return;
         }
-        if (result.content_changed) {
+        const mergedCount = (result.merge?.merged.length ?? 0) + (result.merge?.resolved.length ?? 0);
+        if (result.content_changed && mergedCount > 0) {
+          toast.success(t("mergeUpdate.applied", { count: mergedCount }));
+        } else if (result.content_changed) {
           toast.success(t("mySkills.updateActions.updated"));
         } else {
           toast.info(t("mySkills.updateActions.alreadyUpToDate"));
@@ -2112,6 +2127,43 @@ export function MySkills() {
           } else {
             await handleRefreshSkill(target, approval);
           }
+        }}
+      />
+      <MergeConflictDialog
+        open={mergeHold !== null}
+        skillName={mergeHold?.skill.name ?? ""}
+        report={mergeHold?.report ?? null}
+        onClose={() => {
+          const target = mergeHold?.skill;
+          setMergeHold(null);
+          if (!target) return;
+          // Cancelling drops the pending merge; the library was never touched.
+          api
+            .abortSkillMerge(target.id)
+            .then(() => toast.info(t("mergeUpdate.aborted")))
+            .catch((error: unknown) => toast.error(getErrorMessage(error, t("common.error"))));
+        }}
+        onOpenVersions={(path) => {
+          const target = mergeHold?.skill;
+          if (!target) return;
+          api
+            .revealSkillMergeVersions(target.id, path)
+            .catch((error: unknown) => toast.error(getErrorMessage(error, t("common.error"))));
+        }}
+        onApply={async (choices) => {
+          const target = mergeHold?.skill;
+          if (!target) return;
+          try {
+            for (const [path, take] of Object.entries(choices)) {
+              await api.resolveSkillMerge(target.id, path, take);
+            }
+          } catch (error: unknown) {
+            toast.error(getErrorMessage(error, t("common.error")));
+            return;
+          }
+          setMergeHold(null);
+          // With every conflict decided, updating again applies the merge.
+          await handleRefreshSkill(target);
         }}
       />
       {forkDialog}

@@ -293,6 +293,10 @@ enum SkillsCommand {
     /// file's note (`changes note`), or export them as a patch
     /// (`changes export`).
     Changes(ChangesArgs),
+    /// A merge held over conflicts (sm-69q.6): see it (`merge status`),
+    /// choose a version per file (`merge resolve`), finish the update
+    /// (`merge apply`) or drop it (`merge abort`).
+    Merge(MergeArgs),
     /// Evaluate a library skill with an evaluator skill run by an agent CLI.
     /// Progress goes to stderr; the stored evaluation is printed on success.
     Evaluate {
@@ -377,6 +381,53 @@ enum ChangesCommand {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Args, Debug)]
+struct MergeArgs {
+    #[command(subcommand)]
+    command: MergeCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum MergeCommand {
+    /// The pending merge: target revision, files merged automatically, and
+    /// each conflict with its choice and the folder holding both versions.
+    Status {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+    },
+    /// Choose a version for one conflicted file, or supply resolved content.
+    Resolve {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// File path relative to the skill directory
+        path: String,
+        /// Keep the library's copy (local) or take upstream's (upstream)
+        #[arg(long, value_enum, required_unless_present = "file", conflicts_with = "file")]
+        take: Option<MergeTakeArg>,
+        /// Use this file's content (refused while it has conflict markers)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Finish the held update with the choices made. Holds again if a
+    /// conflict still has no choice, or if upstream or the library changed
+    /// the question.
+    Apply {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+    },
+    /// Drop the pending merge. The library was never touched by it.
+    Abort {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum MergeTakeArg {
+    Local,
+    Upstream,
 }
 
 #[derive(Args, Debug)]
@@ -759,6 +810,14 @@ struct HeldOverwrites {
     /// baseline_suspect when the baseline could not tell which files changed.
     #[serde(skip_serializing_if = "Option::is_none")]
     held_back_reason: Option<app_lib::core::baseline::OverwriteReason>,
+    /// Files merged automatically with local changes (sm-69q.6).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    merged: Vec<String>,
+    /// Files a merge could not settle. Non-empty means the update was held
+    /// and nothing changed: see `skills merge status`, choose with
+    /// `skills merge resolve`, finish with `skills merge apply`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    merge_conflicts: Vec<app_lib::core::skill_update_merge::MergeConflict>,
 }
 
 impl HeldOverwrites {
@@ -770,6 +829,8 @@ impl HeldOverwrites {
                 .map(|o| format!("{}: {}", o.location, o.path))
                 .collect(),
             held_back_reason: result.overwrite_reason,
+            merged: result.merge.iter().flat_map(|m| m.merged.clone()).collect(),
+            merge_conflicts: result.merge.iter().flat_map(|m| m.conflicts.clone()).collect(),
         }
     }
 }
@@ -1219,6 +1280,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             commits,
         } => run_diff(store, &reference, local, upstream, commits, json)?,
         SkillsCommand::Changes(args) => run_changes(store, args, json)?,
+        SkillsCommand::Merge(args) => run_merge(store, args, json)?,
         SkillsCommand::Fork {
             reference,
             new_name,
@@ -1718,6 +1780,92 @@ fn run_changes(store: &SkillStore, args: ChangesArgs, json: bool) -> anyhow::Res
         }
     }
     Ok(())
+}
+
+// ── merge on update (sm-69q.6) ──
+
+fn run_merge(store: &SkillStore, args: MergeArgs, json: bool) -> anyhow::Result<()> {
+    use app_lib::core::skill_update_merge::{self as merge, Take};
+    match args.command {
+        MergeCommand::Status { reference } => {
+            print_json(&merge::status(&resolve_skill(store, &reference)?)?, json);
+        }
+        MergeCommand::Resolve {
+            reference,
+            path,
+            take,
+            file,
+        } => {
+            let skill = resolve_skill(store, &reference)?;
+            let take = match take {
+                Some(MergeTakeArg::Local) => Take::Local,
+                Some(MergeTakeArg::Upstream) => Take::Upstream,
+                None => Take::File,
+            };
+            print_json(&merge::resolve(&skill, &path, take, file.as_deref())?, json);
+        }
+        MergeCommand::Apply { reference } => {
+            merge::require_pending(&resolve_skill(store, &reference)?)?;
+            print_json(&run_update(store, Some(&reference), false)?, json);
+        }
+        MergeCommand::Abort { reference } => {
+            print_json(&merge::abort(&resolve_skill(store, &reference)?)?, json);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod merge_cli_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<SkillsCommand, clap::Error> {
+        let mut full = vec!["skills-manager-cli", "skills"];
+        full.extend_from_slice(args);
+        match Cli::try_parse_from(full).map(|cli| cli.command) {
+            Ok(Commands::Skills(SkillsArgs { command })) => Ok(command),
+            Ok(other) => panic!("unexpected command {other:?}"),
+            Err(err) => Err(err),
+        }
+    }
+
+    #[test]
+    fn parses_the_merge_commands() {
+        assert!(matches!(
+            parse(&["merge", "status", "demo"]).unwrap(),
+            SkillsCommand::Merge(MergeArgs { command: MergeCommand::Status { reference } }) if reference == "demo"
+        ));
+        assert!(matches!(
+            parse(&["merge", "resolve", "demo", "SKILL.md", "--take", "local"]).unwrap(),
+            SkillsCommand::Merge(MergeArgs {
+                command: MergeCommand::Resolve { take: Some(MergeTakeArg::Local), file: None, .. }
+            })
+        ));
+        assert!(matches!(
+            parse(&["merge", "resolve", "demo", "SKILL.md", "--take", "upstream"]).unwrap(),
+            SkillsCommand::Merge(MergeArgs {
+                command: MergeCommand::Resolve { take: Some(MergeTakeArg::Upstream), .. }
+            })
+        ));
+        assert!(matches!(
+            parse(&["merge", "resolve", "demo", "SKILL.md", "--file", "fixed.md"]).unwrap(),
+            SkillsCommand::Merge(MergeArgs {
+                command: MergeCommand::Resolve { take: None, file: Some(f), .. }
+            }) if f == PathBuf::from("fixed.md")
+        ));
+        assert!(parse(&["merge", "resolve", "demo", "SKILL.md"]).is_err());
+        assert!(parse(&["merge", "resolve", "demo", "SKILL.md", "--take", "local", "--file", "x"]).is_err());
+        assert!(parse(&["merge", "resolve", "demo", "SKILL.md", "--take", "theirs"]).is_err());
+        assert!(matches!(
+            parse(&["merge", "apply", "demo"]).unwrap(),
+            SkillsCommand::Merge(MergeArgs { command: MergeCommand::Apply { .. } })
+        ));
+        assert!(matches!(
+            parse(&["merge", "abort", "demo"]).unwrap(),
+            SkillsCommand::Merge(MergeArgs { command: MergeCommand::Abort { .. } })
+        ));
+        assert!(parse(&["merge"]).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -2534,6 +2682,7 @@ fn run_update(
     reference: Option<&str>,
     all: bool,
 ) -> anyhow::Result<Vec<UpdateReport>> {
+    use app_lib::core::skill_update_merge::MergeMode;
     let targets = select_skill_ids(store, reference, all)?;
     let proxy_url = store.proxy_url();
     let mut reports = Vec::new();
@@ -2545,7 +2694,10 @@ fn run_update(
         }
         let report = match skill.source_type.as_str() {
             "git" | "skillssh" => {
-                match cmd::update_git_skill_internal(store, &skill.id, proxy_url.as_deref(), None, None) {
+                // sm-69q.6: one named skill is a person's request, so it merges
+                // local changes; `--all` never does.
+                let merge = if all { MergeMode::Never } else { MergeMode::WhenLocallyChanged };
+                match cmd::update_git_skill_with(store, &skill.id, proxy_url.as_deref(), None, None, merge) {
                     Ok(r) => UpdateReport {
                         skill_id: skill.id.clone(),
                         name: skill.name.clone(),
@@ -4800,11 +4952,49 @@ name: held
         let held = serde_json::to_value(report(HeldOverwrites {
             held_back_overwrites: vec!["library: SKILL.md".to_string()],
             held_back_reason: Some(app_lib::core::baseline::OverwriteReason::LocalChanges),
+            ..Default::default()
         }))
         .unwrap();
         assert_eq!(held["refreshed"], false);
         assert_eq!(held["held_back_overwrites"][0], "library: SKILL.md");
         assert_eq!(held["held_back_reason"], "local_changes");
         assert!(held["error"].is_null(), "a hold is not an error");
+        assert!(held.get("merged").is_none() && held.get("merge_conflicts").is_none());
+    }
+
+    // sm-69q.6: a merged update names its merged files; a held merge its
+    // conflicts. Both are omitted when empty.
+    #[test]
+    fn update_reports_merged_files_and_merge_conflicts() {
+        use app_lib::core::skill_update_merge::{ConflictKind, MergeConflict};
+        let report = |overwrites| UpdateReport {
+            skill_id: "id".to_string(),
+            name: "demo".to_string(),
+            source_type: "git".to_string(),
+            refreshed: true,
+            error: None,
+            held_back_removals: Vec::new(),
+            pinned: false,
+            overwrites,
+        };
+        let merged = serde_json::to_value(report(HeldOverwrites {
+            merged: vec!["SKILL.md".to_string()],
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(merged["merged"][0], "SKILL.md");
+        assert!(merged.get("merge_conflicts").is_none());
+        let held = serde_json::to_value(report(HeldOverwrites {
+            merge_conflicts: vec![MergeConflict {
+                path: "notes.md".to_string(),
+                kind: ConflictKind::Text,
+                local_sha256: None,
+                upstream_sha256: None,
+            }],
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(held["merge_conflicts"][0]["path"], "notes.md");
+        assert_eq!(held["merge_conflicts"][0]["kind"], "text");
     }
 }

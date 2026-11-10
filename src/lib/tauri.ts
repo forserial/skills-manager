@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PinState } from "./pinningApi";
+import type { MergeReport } from "./mergeApi";
 
 // ── Types ──
 
@@ -341,6 +342,12 @@ export interface UpdateSkillResult {
   pending_overwrites?: PendingOverwrite[];
   /** Why `pending_overwrites` holds; null when it is empty. */
   overwrite_reason?: OverwriteReason | null;
+  /**
+   * What merging local changes did (sm-69q.6), when it merged. Conflicts in
+   * it mean nothing was changed: they wait for keep mine / take theirs, then
+   * an update applies the merge. A token does not approve them.
+   */
+  merge?: MergeReport | null;
 }
 
 export interface PendingRemoval {
@@ -903,3 +910,7 @@ export * from "./localChangesApi";
 // ── Change notes and patch export (sm-69q.8) ──
 
 export * from "./changeNotesApi";
+
+// ── Merge on update (sm-69q.6) ──
+
+export * from "./mergeApi";

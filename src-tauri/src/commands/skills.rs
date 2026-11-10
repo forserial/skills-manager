@@ -48,12 +48,17 @@ pub struct UpdateSkillResult {
     /// Why `pending_overwrites` holds: local changes, or a baseline that is
     /// not yet backfilled, unrecoverable or suspect. `None` when it is empty.
     pub overwrite_reason: Option<crate::core::baseline::OverwriteReason>,
+    /// What merging local changes did (sm-69q.6), when it merged. Conflicts
+    /// in it mean **nothing was changed**: they are kept as a pending merge
+    /// for `skills merge resolve` / the merge dialog, not approved by a token.
+    pub merge: Option<crate::core::skill_update_merge::MergeReport>,
 }
 
 impl UpdateSkillResult {
-    /// Declined, having changed nothing: there is something to approve.
+    /// Declined, having changed nothing: there is something to approve, or
+    /// (sm-69q.6) conflicts to resolve.
     pub fn is_held(&self) -> bool {
-        self.removal_approval.is_some()
+        self.removal_approval.is_some() || self.merge.as_ref().is_some_and(|m| m.is_held())
     }
 }
 
@@ -95,6 +100,8 @@ enum UpdateOutcome {
         /// Local edits it would replace (sm-69q.4).
         overwrites: crate::core::baseline::OverwriteCheck,
     },
+    /// Held over merge conflicts (sm-69q.6), having changed nothing.
+    MergeHeld,
 }
 
 /// Everything a replacement would take away — from the library and from every
@@ -1829,13 +1836,15 @@ pub async fn update_skill(
     let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
 
     tauri::async_runtime::spawn_blocking(move || {
+        // A person asked for this update: merge local changes (sm-69q.6).
         let outcome =
-            update_git_skill_internal(
+            update_git_skill_with(
                 &store,
                 &skill_id,
                 proxy_url.as_deref(),
                 Some(&cancel),
                 approved_removals.as_deref(),
+                crate::core::skill_update_merge::MergeMode::WhenLocallyChanged,
             );
         log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
         outcome
@@ -2177,6 +2186,22 @@ pub fn update_git_skill_internal(
     cancel: Option<&Arc<AtomicBool>>,
     approved_removals: Option<&str>,
 ) -> Result<UpdateSkillResult, AppError> {
+    use crate::core::skill_update_merge::MergeMode;
+    update_git_skill_with(store, skill_id, proxy_url, cancel, approved_removals, MergeMode::Never)
+}
+
+/// [`update_git_skill_internal`], merging local changes onto the new version
+/// when `merge` allows it (sm-69q.6). Only callers acting for a person who
+/// asked for this update pass `MergeMode::WhenLocallyChanged`.
+pub fn update_git_skill_with(
+    store: &SkillStore,
+    skill_id: &str,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    approved_removals: Option<&str>,
+    merge: crate::core::skill_update_merge::MergeMode,
+) -> Result<UpdateSkillResult, AppError> {
+    let mut merge_report = None;
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -2232,7 +2257,28 @@ pub fn update_git_skill_internal(
             crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        // sm-69q.6: off the lock, merge local changes onto the new tree.
+        let prepared = match merge {
+            crate::core::skill_update_merge::MergeMode::WhenLocallyChanged => {
+                crate::core::skill_update_merge::prepare(store, &skill, &skill_dir, &remote_revision, proxy_url)
+                    .map_err(AppError::internal)?
+            }
+            crate::core::skill_update_merge::MergeMode::Never => None,
+        };
+        merge_report = prepared.as_ref().map(|p| p.report.clone());
+        let content_changed = prepared.as_ref().map_or(content_changed, |p| p.changes_library());
+        let staged_source = prepared.as_ref().map_or(skill_dir.as_path(), |p| p.merged_dir());
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
+        if let Some(prepared) = &prepared {
+            prepared.verify_library_unchanged().map_err(AppError::internal)?;
+            if prepared.is_held() {
+                prepared.save_pending(&skill).map_err(AppError::internal)?;
+                store
+                    .update_skill_check_state(&skill.id, Some(&remote_revision), "update_available", None)
+                    .map_err(AppError::db)?;
+                return Ok(UpdateOutcome::MergeHeld);
+            }
+        }
 
         // Stage first, then compare. The tree that lands in the library is the
         // installer's output, not the raw checkout — it drops `.git` and every
@@ -2241,7 +2287,7 @@ pub fn update_git_skill_internal(
         let staged_path = staged_path_for(&skill.central_path);
         let install_result = if content_changed {
             Some(
-                installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
+                installer::install_skill_dir_to_destination(staged_source, &skill.name, &staged_path)
                     .inspect_err(|_| {
                         let _ = remove_path_if_exists(&staged_path);
                     })
@@ -2255,10 +2301,11 @@ pub fn update_git_skill_internal(
         let pending = pending_removals_for(store, &skill, install_result.is_some().then_some(staged_path.as_path()))?;
         // sm-69q.4: local edits the swap would replace. Nothing is replaced
         // when nothing was staged, so there is nothing to compare then.
+        // A merged tree carries every local change over, so it replaces none.
         let overwrites = match install_result {
-            Some(_) => crate::core::baseline::pending_overwrites(store, &skill, &staged_path)
+            Some(_) if prepared.is_none() => crate::core::baseline::pending_overwrites(store, &skill, &staged_path)
                 .map_err(AppError::internal)?,
-            None => Default::default(),
+            _ => Default::default(),
         };
 
         // A confirmation answers one exact question: this revision, this list
@@ -2332,19 +2379,30 @@ pub fn update_git_skill_internal(
             resync_copy_targets(store, &skill.id)?;
             sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         }
-        crate::core::baseline::on_upstream_accepted_unlocked(&skill.id, &skill.name, &remote_revision, crate::core::baseline::Origin::Update, &skill_dir);
+        let origin = match prepared {
+            Some(_) => crate::core::baseline::Origin::Merge,
+            None => crate::core::baseline::Origin::Update,
+        };
+        if !prepared.as_ref().is_some_and(|p| p.is_noop()) {
+            crate::core::baseline::on_upstream_accepted_unlocked(&skill.id, &skill.name, &remote_revision, origin, &skill_dir);
+        }
         Ok(UpdateOutcome::Applied { content_changed })
     })();
     git_fetcher::cleanup_temp(&temp_dir);
 
     match update_result {
         Ok(outcome) => {
+            let applied = matches!(outcome, UpdateOutcome::Applied { .. });
             let (content_changed, pending_removals, removal_approval, mut overwrites) = match outcome {
                 UpdateOutcome::Applied { content_changed } => (content_changed, Vec::new(), None, Default::default()),
                 UpdateOutcome::Held { pending, approval, overwrites } => (false, pending, Some(approval), overwrites),
+                UpdateOutcome::MergeHeld => (false, Vec::new(), None, Default::default()),
             };
             // Off the lock: may probe upstream for the baseline's revision.
             crate::core::baseline::refine_unknown_reason(&mut overwrites, &skill, proxy_url);
+            if let Some(report) = &merge_report {
+                crate::core::skill_update_merge::after_update(store, &skill, report, applied);
+            }
             let skill = managed_skill_by_id(store, skill_id)?;
             Ok(UpdateSkillResult {
                 skill,
@@ -2353,6 +2411,7 @@ pub fn update_git_skill_internal(
                 removal_approval,
                 pending_overwrites: overwrites.files,
                 overwrite_reason: overwrites.reason,
+                merge: merge_report,
             })
         }
         Err(e) => {

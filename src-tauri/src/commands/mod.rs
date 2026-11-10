@@ -9,6 +9,7 @@ pub mod pinning;
 pub mod scan;
 pub mod presets;
 pub mod settings;
+pub mod skill_update_merge;
 pub mod skills;
 pub mod sync;
 pub mod tools;
