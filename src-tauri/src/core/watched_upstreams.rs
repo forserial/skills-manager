@@ -133,6 +133,14 @@ fn modify<T>(
     f: impl FnOnce(&mut Vec<WatchedUpstream>) -> Result<(T, bool), AppError>,
 ) -> Result<T, AppError> {
     let _lock = RepoLock::acquire_foreground(operation).map_err(AppError::db)?;
+    modify_unlocked(skill_id, f)
+}
+
+/// [`modify`] for a caller that already holds the repo lock.
+fn modify_unlocked<T>(
+    skill_id: &str,
+    f: impl FnOnce(&mut Vec<WatchedUpstream>) -> Result<(T, bool), AppError>,
+) -> Result<T, AppError> {
     let mut file = read_file(skill_id)?;
     let (out, changed) = f(&mut file.upstreams)?;
     if changed {
@@ -279,18 +287,36 @@ pub fn check(skill_id: &str, proxy_url: Option<&str>) -> Result<Vec<WatchedUpstr
     if watches.is_empty() {
         return Ok(watches);
     }
-    type Resolved = (String, Option<String>, Result<(String, bool), String>);
-    let results: Vec<Resolved> = watches
-        .iter()
-        .map(|w| {
-            let seen = w.last_seen_revision.clone();
-            (w.id.clone(), seen, resolve_movement(w, proxy_url))
-        })
-        .collect();
-    let now = chrono::Utc::now().timestamp_millis();
-    modify(skill_id, "check watched upstreams", |list| {
+    let results: Vec<Resolved> = watches.iter().map(|w| resolve(w, proxy_url)).collect();
+    let _lock = RepoLock::acquire_foreground("check watched upstreams").map_err(AppError::db)?;
+    apply_unlocked(skill_id, &results, chrono::Utc::now().timestamp_millis())
+}
+
+/// One watch's check result, resolved off the lock: its id, the
+/// `last_seen_revision` it was resolved against, and the head plus whether it
+/// moved (or why the remote could not be resolved).
+pub(crate) type Resolved = (String, Option<String>, Result<(String, bool), String>);
+
+/// Resolve one watch. Network; never takes the repo lock.
+pub(crate) fn resolve(watch: &WatchedUpstream, proxy_url: Option<&str>) -> Resolved {
+    (
+        watch.id.clone(),
+        watch.last_seen_revision.clone(),
+        resolve_movement(watch, proxy_url),
+    )
+}
+
+/// Store `results` in the skill's watch file, as of `now`. The caller holds the
+/// repo lock. Returns the list as it now stands, with `checked_at` set to `now`
+/// on every entry this check resolved.
+pub(crate) fn apply_unlocked(
+    skill_id: &str,
+    results: &[Resolved],
+    now: i64,
+) -> Result<Vec<WatchedUpstream>, AppError> {
+    modify_unlocked(skill_id, |list| {
         let mut changed = false;
-        for (id, seen, result) in &results {
+        for (id, seen, result) in results {
             // Removed or re-seen meanwhile: leave it to the next check.
             let Some(entry) = list
                 .iter_mut()
@@ -671,6 +697,8 @@ fn new_id_from(taken: &[&str]) -> String {
         }
     }
 }
+
+pub mod batch;
 
 #[cfg(test)]
 mod tests;

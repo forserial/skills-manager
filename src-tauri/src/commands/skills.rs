@@ -1546,6 +1546,7 @@ pub async fn check_skill_update(
         // meant one check of a slow remote could occupy the repository for the
         // whole round-trip and fail every concurrent operation (#315).
         let prefetched = prefetch_skill_remote(&store, &skill_id, force, proxy_url.as_deref());
+        crate::core::watched_upstreams::batch::check_skill(&skill_id, proxy_url.as_deref()); // sm-69q.13
         let _lock = RepoLock::acquire_foreground("check skill update").map_err(AppError::db)?;
         check_skill_update_internal_with_remote(&store, &skill_id, force, prefetched)
     })
@@ -1639,6 +1640,8 @@ pub async fn check_all_skill_updates(
                 failed.push(format!("{}: {}", skill.id, err));
             }
         }
+        // sm-69q.13: watched upstreams, off the lock; never fails the batch.
+        crate::core::watched_upstreams::batch::check_library(&store, force_check, proxy_url.as_deref());
 
         if failed.is_empty() {
             Ok(())

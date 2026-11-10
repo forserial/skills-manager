@@ -4,10 +4,10 @@ use std::fs;
 use std::sync::MutexGuard;
 use tempfile::{TempDir, tempdir};
 
-struct TestRepo {
+pub(super) struct TestRepo {
     _lock: MutexGuard<'static, ()>,
-    tmp: TempDir,
-    store: SkillStore,
+    pub(super) tmp: TempDir,
+    pub(super) store: SkillStore,
 }
 
 impl Drop for TestRepo {
@@ -16,7 +16,7 @@ impl Drop for TestRepo {
     }
 }
 
-fn test_repo() -> TestRepo {
+pub(super) fn test_repo() -> TestRepo {
     let lock = central_repo::test_base_dir_lock();
     let tmp = tempdir().unwrap();
     let base = tmp.path().join("repo");
@@ -57,7 +57,7 @@ fn record(id: &str, name: &str, source_type: &str) -> SkillRecord {
 }
 
 /// A skill in the library, as a local-folder install leaves it.
-fn insert_local_skill(store: &SkillStore, id: &str, name: &str) -> PathBuf {
+pub(super) fn insert_local_skill(store: &SkillStore, id: &str, name: &str) -> PathBuf {
     let mut rec = record(id, name, "local");
     let dir = PathBuf::from(&rec.central_path);
     fs::create_dir_all(dir.join("scripts")).unwrap();
@@ -89,7 +89,7 @@ fn git_in(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn file_url(path: &Path) -> String {
+pub(super) fn file_url(path: &Path) -> String {
     let raw = path.display().to_string().replace('\\', "/");
     if raw.starts_with('/') {
         format!("file://{raw}")
@@ -100,13 +100,13 @@ fn file_url(path: &Path) -> String {
 
 /// A local bare repository fed from a work tree. Holds `skills/a/SKILL.md`
 /// and `README.md`.
-struct Upstream {
+pub(super) struct Upstream {
     work: PathBuf,
-    url: String,
+    pub(super) url: String,
 }
 
 impl Upstream {
-    fn new(root: &Path) -> Self {
+    pub(super) fn new(root: &Path) -> Self {
         let bare = root.join("upstream.git");
         let work = root.join("upstream-work");
         fs::create_dir_all(&bare).unwrap();
@@ -127,11 +127,11 @@ impl Upstream {
         }
     }
 
-    fn head(&self) -> String {
+    pub(super) fn head(&self) -> String {
         git_in(&self.work, &["rev-parse", "HEAD"])
     }
 
-    fn commit(&self, rel: &str, body: &str) -> String {
+    pub(super) fn commit(&self, rel: &str, body: &str) -> String {
         fs::write(self.work.join(rel), body).unwrap();
         git_in(&self.work, &["add", rel]);
         git_in(&self.work, &["commit", "-qm", rel]);
@@ -161,7 +161,7 @@ fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-fn new_watch(url: &str) -> NewWatch {
+pub(super) fn new_watch(url: &str) -> NewWatch {
     NewWatch {
         git_url: url.to_string(),
         ..Default::default()

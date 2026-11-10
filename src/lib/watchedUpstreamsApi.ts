@@ -40,6 +40,44 @@ export const checkWatchedUpstreams = (skillId: string) =>
 export const markWatchedUpstreamSeen = (skillId: string, watchId: string) =>
   invoke<WatchedUpstream>("mark_watched_upstream_seen", { skillId, watchId });
 
+/** What the "Borrowed from" form asks for (sm-69q.13). Without a revision,
+ *  the remote's current head counts as seen, so adding needs it reachable. */
+export interface NewWatchInput {
+  gitUrl: string;
+  subpath?: string | null;
+  branch?: string | null;
+  note?: string | null;
+}
+
+export const addWatchedUpstream = (skillId: string, input: NewWatchInput) =>
+  invoke<WatchedUpstream>("add_watched_upstream", {
+    skillId,
+    gitUrl: input.gitUrl,
+    subpath: input.subpath || null,
+    branch: input.branch || null,
+    note: input.note || null,
+  });
+
+export const removeWatchedUpstream = (skillId: string, watchId: string) =>
+  invoke<WatchedUpstream>("remove_watched_upstream", { skillId, watchId });
+
+/** A skill-card marker: a skill that watches something, and how much moved. */
+export interface WatchedMarker {
+  skill_id: string;
+  watch_count: number;
+  moved_count: number;
+}
+
+/** Every skill that watches something. No network. */
+export const getWatchedUpstreamMarkers = () =>
+  invoke<WatchedMarker[]>("get_watched_upstream_markers");
+
+/** Dispatched on `window` after the app changes a skill's watches, so card
+ *  markers reload without a full skill-list refresh. */
+export const WATCHED_UPSTREAMS_CHANGED = "watched-upstreams-changed";
+export const notifyWatchedUpstreamsChanged = () =>
+  window.dispatchEvent(new Event(WATCHED_UPSTREAMS_CHANGED));
+
 export const forkSkill = (skillId: string, newName: string) =>
   invoke<ForkResult>("fork_skill", { skillId, newName });
 

@@ -368,6 +368,12 @@ change the skill's own source.
 - `skills check` carries `watched_moved` for every skill (and `watched` when it
   watches something), so one `skills check --all` covers updates and borrowed
   sources.
+- In the app, "Check all", a single skill's "Check for update" and the
+  background auto-updater check watched upstreams too, and a skill card shows
+  "Upstream moved" until the user marks it seen. An unreachable upstream never
+  fails those checks. The detail panel's "Borrowed from" section can add and
+  remove watches (adding needs the location reachable, since its current head
+  counts as seen; use the CLI's `--revision` otherwise).
 - `fork` refuses a name that is taken. The new skill is `local` with no source
   folder, tags, presets or deployments; the original is untouched. Content is
   copied byte for byte except the `name:` line of the `SKILL.md` frontmatter.

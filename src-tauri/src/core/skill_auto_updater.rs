@@ -224,6 +224,8 @@ pub(crate) fn run_round_blocking(store: &SkillStore) -> Result<RoundCounts, Stri
             }
         }
     }
+    // sm-69q.13: watched upstreams too, within the TTL; logs its own summary.
+    crate::core::watched_upstreams::batch::check_library(store, false, proxy.as_deref());
     log::info!(
         "skill auto-updater: round done — checked={checked} available={available} updated={updated} held_back={held_back} pinned={pinned} failed={failed}"
     );
