@@ -1006,8 +1006,9 @@ impl SkillStore {
         &self,
         scenarios: &[super::sync_metadata::ScenarioMetaFile],
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        // A savepoint: it nests inside the reindex transaction (sm-69q.22).
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.savepoint()?;
         let metadata_ids: std::collections::HashSet<&str> =
             scenarios.iter().map(|s| s.scenario_id.as_str()).collect();
         {
@@ -1050,8 +1051,9 @@ impl SkillStore {
         &self,
         memberships: &[super::sync_metadata::ScenarioSkillMetaFile],
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        // A savepoint: it nests inside the reindex transaction (sm-69q.22).
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.savepoint()?;
         tx.execute("DELETE FROM scenario_skill_tools", [])?;
         tx.execute("DELETE FROM scenario_skills", [])?;
 
