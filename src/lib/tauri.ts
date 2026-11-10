@@ -866,3 +866,7 @@ export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string)
 // ── Evaluation ──
 
 export * from "./evaluationApi";
+
+// ── Local changes against the baseline (sm-69q.3) ──
+
+export * from "./localChangesApi";

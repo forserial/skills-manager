@@ -28,6 +28,7 @@ import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SkillEvaluationSection } from "./SkillEvaluationSection";
 import { SkillBorrowedFromSection } from "./SkillBorrowedFromSection";
+import { SkillLocalChangesSection } from "./SkillLocalChangesSection";
 import { SyncDots } from "./SyncDots";
 
 interface Props {
@@ -331,6 +332,8 @@ function SkillDetailPanelContent({
       )}
 
       <SkillEvaluationSection skill={skill} />
+
+      <SkillLocalChangesSection skill={skill} />
 
       <SkillBorrowedFromSection skill={skill} />
 

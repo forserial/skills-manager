@@ -107,6 +107,9 @@ enum SkillsCommand {
         no_preset: bool,
         #[arg(long)]
         source: Option<String>,
+        /// Only skills with local changes against their baseline (sm-69q.3)
+        #[arg(long)]
+        modified: bool,
     },
     Show {
         reference: String,
@@ -254,6 +257,14 @@ enum SkillsCommand {
     Tag(TagArgs),
     /// Baselines: what upstream shipped at the revision a git skill came from.
     Baseline(BaselineArgs),
+    /// Compare a skill. --local: the library copy against its baseline.
+    Diff {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// The library copy against its baseline: the files changed locally
+        #[arg(long)]
+        local: bool,
+    },
     /// Evaluate a library skill with an evaluator skill run by an agent CLI.
     /// Progress goes to stderr; the stored evaluation is printed on success.
     Evaluate {
@@ -547,6 +558,9 @@ struct SkillStatusReport {
     skill: SkillSummary,
     agents: Vec<SkillAgentStatus>,
     baseline: Option<app_lib::core::baseline::BaselineSummary>,
+    /// Files changed against the baseline (sm-69q.3); null when they could
+    /// not be read.
+    local_changes: Option<app_lib::core::baseline::LocalChanges>,
 }
 
 #[derive(Debug, Serialize)]
@@ -975,8 +989,9 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             untagged,
             no_preset,
             source,
-        } => print_json(
-            &list_skills_filtered(
+            modified,
+        } => {
+            let summaries = list_skills_filtered(
                 store,
                 query.as_deref(),
                 &tags,
@@ -985,9 +1000,9 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
                 untagged,
                 no_preset,
                 source.as_deref(),
-            )?,
-            json,
-        ),
+            )?;
+            print_json(&list_with_local_changes(store, summaries, modified)?, json)
+        }
         SkillsCommand::Show { reference } => print_json(&show_skill(store, &reference)?, json),
         SkillsCommand::Export {
             reference,
@@ -1126,6 +1141,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             )?;
             print_json(&report, json);
         }
+        SkillsCommand::Diff { reference, local } => run_diff(store, &reference, local, json)?,
         SkillsCommand::Tag(args) => run_tag(args, store, json)?,
         SkillsCommand::Baseline(BaselineArgs {
             command: BaselineCommand::Rebuild { reference, all, force },
@@ -1430,7 +1446,186 @@ fn skill_status(store: &SkillStore, reference: &str) -> anyhow::Result<SkillStat
         skill: summary,
         agents,
         baseline: app_lib::core::baseline::summary_for(&skill.id),
+        local_changes: local_changes_report(store, &skill),
     })
+}
+
+// ── local changes against the baseline (sm-69q.3) ──
+
+/// One row of `skills list`: the summary plus where it stands against its
+/// baseline.
+#[derive(Debug, Serialize)]
+struct ListedSkill {
+    #[serde(flatten)]
+    skill: SkillSummary,
+    /// Files changed against the baseline; null when the baseline is not known.
+    local_change_count: Option<usize>,
+    /// False for local skills, git skills with no baseline yet, and skills
+    /// pending in a library sync conflict (baseline suspect).
+    baseline_known: bool,
+    /// clean | changed | baseline_unknown | baseline_suspect | untracked;
+    /// null when the library copy could not be read.
+    local_state: Option<app_lib::core::baseline::LocalState>,
+}
+
+fn list_with_local_changes(
+    store: &SkillStore,
+    summaries: Vec<SkillSummary>,
+    modified_only: bool,
+) -> anyhow::Result<Vec<ListedSkill>> {
+    let wanted: std::collections::HashSet<&str> =
+        summaries.iter().map(|s| s.id.as_str()).collect();
+    let records: Vec<_> = store
+        .get_all_skills()?
+        .into_iter()
+        .filter(|skill| wanted.contains(skill.id.as_str()))
+        .collect();
+    let changes = app_lib::core::baseline::local_changes_for(store, &records)?;
+    Ok(join_local_changes(summaries, &changes, modified_only))
+}
+
+fn join_local_changes(
+    summaries: Vec<SkillSummary>,
+    changes: &std::collections::HashMap<String, app_lib::core::baseline::LocalChanges>,
+    modified_only: bool,
+) -> Vec<ListedSkill> {
+    summaries
+        .into_iter()
+        .filter_map(|skill| {
+            let found = changes.get(&skill.id);
+            if modified_only && !found.is_some_and(|c| c.is_changed()) {
+                return None;
+            }
+            Some(ListedSkill {
+                local_change_count: found.and_then(|c| c.change_count()),
+                baseline_known: found.is_some_and(|c| c.baseline_known()),
+                local_state: found.map(|c| c.state),
+                skill,
+            })
+        })
+        .collect()
+}
+
+fn local_changes_report(
+    store: &SkillStore,
+    skill: &app_lib::core::skill_store::SkillRecord,
+) -> Option<app_lib::core::baseline::LocalChanges> {
+    match app_lib::core::baseline::local_changes(store, skill) {
+        Ok(changes) => Some(changes),
+        Err(err) => {
+            eprintln!("status: local changes of {}: {err:#}", skill.id);
+            None
+        }
+    }
+}
+
+/// `skills diff`. Only `--local` is handled here; the other comparisons
+/// arrive with sm-69q.5.
+fn run_diff(store: &SkillStore, reference: &str, local: bool, json: bool) -> anyhow::Result<()> {
+    if local {
+        return run_diff_local(store, reference, json);
+    }
+    bail!("skills diff needs --local on this build: comparing with upstream is not available yet")
+}
+
+/// `skills diff <skill> --local`: the library copy against its baseline.
+fn run_diff_local(store: &SkillStore, reference: &str, json: bool) -> anyhow::Result<()> {
+    let skill = resolve_skill(store, reference)?;
+    let proxy = store.proxy_url();
+    let diff = app_lib::core::baseline::local_diff(store, &skill, proxy.as_deref())?;
+    print_json(&diff, json);
+    Ok(())
+}
+
+#[cfg(test)]
+mod local_changes_tests {
+    use super::*;
+    use app_lib::core::baseline::{FileChangeState, LocalChanges, LocalFileChange, LocalState};
+
+    fn summary(id: &str) -> SkillSummary {
+        SkillSummary {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            path: format!("/lib/{id}"),
+            enabled: true,
+            tags: Vec::new(),
+            source_type: "git".to_string(),
+            source_ref: None,
+            preset_ids: Vec::new(),
+            presets: Vec::new(),
+            deployed_to: Vec::new(),
+        }
+    }
+
+    fn changes(id: &str, state: LocalState) -> (String, LocalChanges) {
+        let files = if state == LocalState::Changed {
+            vec![LocalFileChange {
+                path: "SKILL.md".to_string(),
+                state: FileChangeState::Modified,
+            }]
+        } else {
+            Vec::new()
+        };
+        let changes = LocalChanges {
+            skill_id: id.to_string(),
+            state,
+            baseline_revision: None,
+            files,
+        };
+        (id.to_string(), changes)
+    }
+
+    #[test]
+    fn list_modified_keeps_exactly_the_changed_skills() {
+        let map: std::collections::HashMap<_, _> = [
+            changes("clean", LocalState::Clean),
+            changes("changed", LocalState::Changed),
+            changes("unknown", LocalState::BaselineUnknown),
+            changes("suspect", LocalState::BaselineSuspect),
+            changes("local", LocalState::Untracked),
+        ]
+        .into_iter()
+        .collect();
+        let ids = ["clean", "changed", "unknown", "suspect", "local", "unreadable"];
+        let all = join_local_changes(ids.iter().map(|id| summary(id)).collect(), &map, false);
+        assert_eq!(all.len(), 6);
+        let row = |id: &str| all.iter().find(|r| r.skill.id == id).unwrap();
+        assert_eq!(row("changed").local_change_count, Some(1));
+        assert!(row("changed").baseline_known);
+        assert_eq!(row("clean").local_change_count, Some(0));
+        for id in ["unknown", "suspect", "local", "unreadable"] {
+            assert_eq!(row(id).local_change_count, None, "{id}");
+            assert!(!row(id).baseline_known, "{id}");
+        }
+        let json = serde_json::to_value(row("suspect")).unwrap();
+        assert_eq!(json["local_state"], "baseline_suspect");
+        assert_eq!(json["name"], "suspect");
+
+        let modified = join_local_changes(ids.iter().map(|id| summary(id)).collect(), &map, true);
+        let ids: Vec<_> = modified.iter().map(|r| r.skill.id.as_str()).collect();
+        assert_eq!(ids, vec!["changed"]);
+    }
+
+    #[test]
+    fn parses_diff_local_and_list_modified() {
+        let cli = Cli::try_parse_from(["skills-manager-cli", "skills", "diff", "demo", "--local"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Skills(SkillsArgs {
+                command: SkillsCommand::Diff { reference, local: true }
+            }) if reference == "demo"
+        ));
+        let cli = Cli::try_parse_from(["skills-manager-cli", "skills", "list", "--modified"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Skills(SkillsArgs {
+                command: SkillsCommand::List { modified: true, .. }
+            })
+        ));
+    }
 }
 
 fn resolve_skill_references(

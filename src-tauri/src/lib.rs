@@ -1038,6 +1038,10 @@ pub fn run() {
             commands::watched_upstreams::check_watched_upstreams,
             commands::watched_upstreams::mark_watched_upstream_seen,
             commands::watched_upstreams::fork_skill,
+            // Local changes against the baseline (fork, sm-69q.3)
+            commands::baseline::get_skill_local_changes,
+            commands::baseline::get_local_change_markers,
+            commands::baseline::get_skill_local_diff,
             commands::skills::get_all_tags,
             commands::skills::set_skill_tags,
             commands::skills::rename_tag,

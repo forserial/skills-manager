@@ -1146,6 +1146,23 @@
     "markSeen": "Mark as seen",
     "markedSeen": "Marked as seen"
   },
+  "localChanges": {
+    "title": "Your changes",
+    "showDiff": "Show diff",
+    "hideDiff": "Hide diff",
+    "diffUnavailable": "The baseline content could not be loaded, so only the changed files are listed.",
+    "state": {
+      "modified": "Modified",
+      "added": "Added",
+      "deleted": "Deleted"
+    },
+    "markerChanged": "Edited",
+    "markerChangedTitle_one": "{{count}} file differs from what upstream shipped",
+    "markerChangedTitle_other": "{{count}} files differ from what upstream shipped",
+    "markerUnknown": "Baseline unknown",
+    "unknownHint": "There is no record of what upstream shipped for this skill, so your edits cannot be told apart from it.",
+    "suspectHint": "A library sync conflict on this skill is pending, so its record of what upstream shipped may be wrong. Resolve the conflict first."
+  },
   "fork": {
     "menu": "Fork",
     "title": "Fork {{name}}",

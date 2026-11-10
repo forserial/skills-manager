@@ -506,7 +506,7 @@ fn classify_diff_bytes(bytes: Option<Vec<u8>>) -> (&'static str, Option<String>)
 /// Diff the whole content scope of two skill directories. `original_dir` is
 /// the central copy (old), `updated_dir` is the source (new). Uses the same
 /// file enumeration as the hash so it reports exactly what flips the badge.
-fn build_source_diff_entries(
+pub(crate) fn build_source_diff_entries(
     original_dir: &Path,
     updated_dir: &Path,
 ) -> Vec<SkillSourceDiffEntryDto> {
