@@ -34,6 +34,7 @@ pub mod path_guard;
 pub mod pinning;
 pub mod process;
 pub mod project_scanner;
+pub mod reindex_guard; // sm-69q.18 / sm-69q.22
 pub mod removals;
 pub mod repo_lock;
 pub mod scanner;

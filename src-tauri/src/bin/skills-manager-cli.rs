@@ -7,11 +7,12 @@ use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd}
 use app_lib::core::{
     agent_runner, app_state, audit_log::AuditDraft, central_repo, error::AppError, evaluation,
     git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
+    installer, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
     well_known,
 };
 use app_lib::core::watched_upstreams;
+use app_lib::core::reindex_guard; // sm-69q.18
 // sm-69q.16: `skills orphans`.
 #[path = "skills-manager-cli-parts/orphans.rs"]
 mod orphans_cli;
@@ -4039,11 +4040,9 @@ fn run_git(
         }
         GitCommand::Clone { url } => {
             let target = central_repo::skills_dir();
-            if has_skills_root {
-                git_backup::clone_into_strict(&target, &url)?;
-            } else {
-                git_backup::clone_into(&target, &url)?;
-            }
+            // sm-69q.18: reindex under the clone's lock, or the running app's
+            // next metadata write deletes the cloned skills' records.
+            reindex_guard::clone_and_reindex(store, &target, &url, has_skills_root)?;
             print_json(&git_backup::get_status(&target)?, json);
         }
         GitCommand::SetRemote { url } => {
@@ -4055,20 +4054,16 @@ fn run_git(
             // merge_engine=system opts out). A raw line merge from this CLI
             // would read as an old-client violation on other devices (§6).
             let dir = central_repo::skills_dir();
-            {
-                let _lock = RepoLock::acquire_foreground("git pull")?;
-                let device = store
-                    .get_setting("backup_device_name")
-                    .ok()
-                    .flatten()
-                    .map(|v| git_backup::sanitize_device_name(&v))
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(git_backup::default_device_name);
-                let _ = git_backup::configure_device_identity(&dir, &device);
-                merge::gated_pull_unlocked(store, &dir)?;
-            }
-            // Reconcile the DB from the merged metadata (takes its own lock).
-            sync_metadata::reindex_from_metadata(store)?;
+            let device = store
+                .get_setting("backup_device_name")
+                .ok()
+                .flatten()
+                .map(|v| git_backup::sanitize_device_name(&v))
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(git_backup::default_device_name);
+            // sm-69q.18: the reindex runs under the pull's own lock; between
+            // two locks the app could write metadata from the pre-pull DB.
+            reindex_guard::pull_and_reindex(store, &dir, &device)?;
             print_json(&git_backup::get_status(&dir)?, json);
         }
         GitCommand::Push => {
@@ -4085,7 +4080,8 @@ fn run_git(
             json,
         ),
         GitCommand::Restore { tag } => {
-            git_backup::restore_snapshot_version(&central_repo::skills_dir(), &tag)?;
+            // sm-69q.18: reindex under the restore's lock (see Clone).
+            reindex_guard::restore_and_reindex(store, &central_repo::skills_dir(), &tag)?;
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::PruneSyncRefs => {
@@ -5056,3 +5052,8 @@ name: held
 #[cfg(test)]
 #[path = "skills-manager-cli-tests/adapted_skills.rs"]
 mod adapted_skills_tests;
+
+// sm-69q.18: git restore / clone / pull leave no stale database behind.
+#[cfg(test)]
+#[path = "skills-manager-cli-tests/stale_db.rs"]
+mod stale_db_tests;

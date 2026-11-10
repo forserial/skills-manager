@@ -964,7 +964,7 @@ pub fn clone_into_strict(skills_dir: &Path, url: &str) -> Result<()> {
 /// existing `.git` is left to `clone_into_unlocked` to reject with its own
 /// message. Pure logic — no locking — so callers must hold their own lock if
 /// they need atomicity with a subsequent operation.
-fn ensure_clean_clone_target(skills_dir: &Path) -> Result<()> {
+pub(crate) fn ensure_clean_clone_target(skills_dir: &Path) -> Result<()> {
     if !skills_dir.exists() {
         return Ok(());
     }

@@ -116,8 +116,12 @@ pub(crate) fn write_all_from_db_unlocked(store: &SkillStore) -> Result<()> {
     write_schema()?;
     write_skill_records_from_db(store)?;
     write_scenario_records_from_db(store)?;
-    remove_stale_metadata_files(store)?;
-    super::fork_files::sweep_orphans_unlocked(store)?;
+    // sm-69q.18: after a failed reindex the database is behind the disk, and
+    // what it does not know is not stale (see reindex_guard).
+    if super::reindex_guard::deletions_allowed() {
+        remove_stale_metadata_files(store)?;
+        super::fork_files::sweep_orphans_unlocked(store)?;
+    }
     Ok(())
 }
 
@@ -161,6 +165,12 @@ pub fn reindex_from_metadata(store: &SkillStore) -> Result<()> {
 }
 
 pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
+    let result = reindex_from_metadata_once(store);
+    super::reindex_guard::record_reindex_outcome(&result);
+    result
+}
+
+fn reindex_from_metadata_once(store: &SkillStore) -> Result<()> {
     if !metadata_exists() {
         return Ok(());
     }
@@ -189,22 +199,15 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
     let skills_root = central_repo::skills_dir();
 
     let metadata_ids: HashSet<String> = skills.iter().map(|m| m.skill_id.clone()).collect();
-    for existing in store.get_all_skills()? {
-        if !metadata_ids.contains(&existing.id) {
-            store.delete_skill(&existing.id)?;
-        }
-    }
 
+    // sm-69q.22: everything is read and hashed before the first write, and
+    // the writes are one transaction, so a failure leaves the database as it
+    // was. (Only rows of metadata ids are looked up here.)
     let existing_by_id: HashMap<String, SkillRecord> = store
         .get_all_skills()?
         .into_iter()
         .map(|skill| (skill.id.clone(), skill))
         .collect();
-
-    // Every surviving row gets its central_path rewritten below; park them
-    // on placeholders first so path reassignments between skills (renames or
-    // merge collision reshuffles) cannot trip the UNIQUE constraint mid-loop.
-    store.park_central_paths_for_reindex()?;
 
     // Hashing reads every file of every skill, and this runs at each launch and
     // each CLI command: a library holding one 13k-file skill took 90 s on
@@ -216,12 +219,24 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         HashMap::new()
     });
 
+    // Per metadata record: its row, tags and content stamp, or None to drop it.
+    let mut rows = Vec::new();
     for meta in skills {
-        let skill_dir = skills_root.join(&meta.path);
-        if !skill_dir.is_dir() {
-            store.delete_skill(&meta.skill_id)?;
-            continue;
-        }
+        // sm-69q.22: a dangling link or a case-only difference is not a
+        // missing folder.
+        let skill_dir = match super::reindex_guard::locate_skill_dir(&skills_root, &meta.path) {
+            super::reindex_guard::SkillDir::Found(dir) => dir,
+            super::reindex_guard::SkillDir::Unreachable(link) => {
+                let previous = existing_by_id.get(&meta.skill_id);
+                let record = super::reindex_guard::unreachable_record(&meta, &link, previous, now);
+                rows.push((meta.skill_id, Some((record, meta.tags, None))));
+                continue;
+            }
+            super::reindex_guard::SkillDir::Gone => {
+                rows.push((meta.skill_id, None));
+                continue;
+            }
+        };
 
         let parsed = skill_metadata::parse_skill_md(&skill_dir);
         let inferred_name = skill_dir
@@ -278,16 +293,34 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
             last_checked_at: previous.and_then(|s| s.last_checked_at),
             last_check_error: previous.and_then(|s| s.last_check_error.clone()),
         };
+        let stamp = hashed.stamp.map(|stamp| (stamp, hashed.hash));
+        rows.push((meta.skill_id, Some((record, meta.tags, stamp))));
+    }
+
+    let transaction = super::reindex_guard::ReindexTransaction::begin(store)?;
+    for existing in store.get_all_skills()? {
+        if !metadata_ids.contains(&existing.id) {
+            store.delete_skill(&existing.id)?;
+        }
+    }
+
+    // Every surviving row gets its central_path rewritten below; park them
+    // on placeholders first so path reassignments between skills (renames or
+    // merge collision reshuffles) cannot trip the UNIQUE constraint mid-loop.
+    store.park_central_paths_for_reindex()?;
+
+    for (skill_id, row) in rows {
+        let Some((record, tags, stamp)) = row else {
+            store.delete_skill(&skill_id)?;
+            continue;
+        };
         store.upsert_skill(&record)?;
-        store.set_tags_for_skill(&meta.skill_id, &meta.tags)?;
+        store.set_tags_for_skill(&skill_id, &tags)?;
         // After the row, so a stamp is never stored ahead of the hash it vouches
         // for. A cache that could not be written costs a re-read next launch.
-        if let Some(stamp) = &hashed.stamp {
-            if let Err(err) = store.set_content_stamp(&meta.skill_id, stamp, &hashed.hash) {
-                log::warn!(
-                    "reindex: cannot record content stamp for {}: {err:#}",
-                    meta.skill_id
-                );
+        if let Some((stamp, hash)) = &stamp {
+            if let Err(err) = store.set_content_stamp(&skill_id, stamp, hash) {
+                log::warn!("reindex: cannot record content stamp for {skill_id}: {err:#}");
             }
         }
     }
@@ -296,7 +329,7 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         store.replace_scenarios_from_metadata(&scenarios)?;
         store.replace_scenario_memberships_from_metadata(&memberships)?;
     }
-    Ok(())
+    transaction.commit()
 }
 
 #[allow(dead_code)]
