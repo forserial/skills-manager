@@ -13,8 +13,10 @@ use app_lib::core::{
 };
 use app_lib::core::watched_upstreams;
 use app_lib::core::reindex_guard; // sm-69q.18
-// sm-69q.16: `skills orphans`.
-#[path = "skills-manager-cli-parts/orphans.rs"]
+// sm-69q.16: `skills orphans`. CLI-only modules live in src/cli/, not in a
+// folder under src/bin/: Tauri's bundler treats every src/bin/ subfolder as
+// a binary to package, and the release build fails looking for it.
+#[path = "../cli/orphans.rs"]
 mod orphans_cli;
 use orphans_cli::{run_orphans, OrphansArgs};
 use app_lib::core::pinning;
@@ -5050,10 +5052,10 @@ name: held
 
 // sm-69q.11: the adapted-skills scenarios through the CLI.
 #[cfg(test)]
-#[path = "skills-manager-cli-tests/adapted_skills.rs"]
+#[path = "../cli/tests/adapted_skills.rs"]
 mod adapted_skills_tests;
 
 // sm-69q.18: git restore / clone / pull leave no stale database behind.
 #[cfg(test)]
-#[path = "skills-manager-cli-tests/stale_db.rs"]
+#[path = "../cli/tests/stale_db.rs"]
 mod stale_db_tests;
