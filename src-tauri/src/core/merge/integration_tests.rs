@@ -448,6 +448,39 @@ fn resolve_keep_both_duplicates_under_device_suffix() {
     assert!(!git_backup::has_uncommitted_changes(&a.skills).unwrap());
 }
 
+/// sm-69q.20: the remote copy's metadata is written before its folder is
+/// moved in, so a failed write leaves no folder without a record.
+#[test]
+fn resolve_keep_both_that_cannot_write_metadata_leaves_no_folder() {
+    let env = setup();
+    let (a, b) = seeded_pair(&env);
+    b.activate();
+    b.write_skill("skill-1", "alpha", "edited on B");
+    b.commit("edit on B");
+    b.push();
+    a.activate();
+    a.write_skill("skill-1", "alpha", "edited on A");
+    a.commit("edit on A");
+    a.pull();
+
+    a.activate();
+    let armed = crate::core::fail_points::arm("resolve.write_meta");
+    let err = resolve_conflict_unlocked(&a.store, &a.skills, "skill-1", ResolveAction::KeepBoth);
+    drop(armed);
+
+    assert!(err.is_err());
+    assert!(!a.skills.join("alpha (Device B)").exists(), "no folder without a record");
+    assert_eq!(a.skill_md("alpha"), "edited on A");
+    let leftovers: Vec<_> = std::fs::read_dir(a.base.as_path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".sm-resolve-"))
+        .collect();
+    assert!(leftovers.is_empty(), "the staged copy is cleaned up");
+    // Still pending: the user can try again.
+    assert_eq!(a.store.list_pending_conflicts().unwrap().len(), 1);
+}
+
 // ── deletion propagation ──
 
 #[test]

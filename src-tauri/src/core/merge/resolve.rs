@@ -150,6 +150,18 @@ fn apply_use_remote(
             || target_path.starts_with(&format!("{local}/"))
             || local.starts_with(&format!("{target_path}/"))
     });
+    let meta = SkillMetaFile {
+        schema_version: theirs_skill.meta.schema_version,
+        skill_id: skill_id.to_string(),
+        path_key: path_key(&target_path),
+        path: target_path.clone(),
+        enabled: theirs_skill.meta.enabled,
+        tags: theirs_skill.meta.tags.clone(),
+        source: theirs_skill.meta.source.clone(),
+    };
+    // The metadata file is written before the folder it names could be left
+    // without one (sm-69q.20): a failure after the move no longer strands the
+    // remote copy as a folder with no record.
     if overlaps == Some(true) {
         if let Some(meta) = &local_meta {
             let dir = skills_dir.join(&meta.path);
@@ -157,13 +169,23 @@ fn apply_use_remote(
                 std::fs::remove_dir_all(&dir)?;
             }
         }
+        if let Err(e) = write_worktree_meta(skills_dir, &meta) {
+            let _ = std::fs::remove_dir_all(&staged);
+            return Err(e);
+        }
         place_staged(&staged, skills_dir, &target_path)?;
     } else {
         place_staged(&staged, skills_dir, &target_path)?;
-        if let Some(meta) = &local_meta {
-            let dir = skills_dir.join(&meta.path);
+        if let Err(e) = write_worktree_meta(skills_dir, &meta) {
+            let _ = std::fs::remove_dir_all(skills_dir.join(&target_path));
+            return Err(e);
+        }
+        if let Some(old) = &local_meta {
+            let dir = skills_dir.join(&old.path);
             if dir.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    // Back to the local version: its record, then its folder.
+                    let _ = write_worktree_meta(skills_dir, old);
                     let _ = std::fs::remove_dir_all(skills_dir.join(&target_path));
                     return Err(e).with_context(|| {
                         format!("failed to remove local skill {}", dir.display())
@@ -172,17 +194,7 @@ fn apply_use_remote(
             }
         }
     }
-
-    let meta = SkillMetaFile {
-        schema_version: theirs_skill.meta.schema_version,
-        skill_id: skill_id.to_string(),
-        path_key: path_key(&target_path),
-        path: target_path,
-        enabled: theirs_skill.meta.enabled,
-        tags: theirs_skill.meta.tags.clone(),
-        source: theirs_skill.meta.source.clone(),
-    };
-    write_worktree_meta(skills_dir, &meta)
+    Ok(())
 }
 
 /// Keep the local version and add the theirs version as a new skill with a
@@ -216,18 +228,28 @@ fn apply_keep_both(
     let new_id = uuid::Uuid::new_v4().to_string();
     let target_path = free_path_for(skills_dir, &base_name, &new_id)?;
     let staged = stage_skill_extract(repo, content, skills_dir)?;
-    place_staged(&staged, skills_dir, &target_path)?;
 
     let meta = SkillMetaFile {
         schema_version: theirs_skill.meta.schema_version,
         skill_id: new_id,
         path_key: path_key(&target_path),
-        path: target_path,
+        path: target_path.clone(),
         enabled: theirs_skill.meta.enabled,
         tags: theirs_skill.meta.tags.clone(),
         source: theirs_skill.meta.source.clone(),
     };
-    write_worktree_meta(skills_dir, &meta)
+    // Record first, then the folder (sm-69q.20): a record whose folder never
+    // arrived is dropped by the reindex; a folder with no record would stay
+    // in the library unmanaged.
+    if let Err(e) = write_worktree_meta(skills_dir, &meta) {
+        let _ = std::fs::remove_dir_all(&staged);
+        return Err(e);
+    }
+    if let Err(e) = place_staged(&staged, skills_dir, &target_path) {
+        let _ = std::fs::remove_file(worktree_meta_path(skills_dir, &meta.skill_id));
+        return Err(e);
+    }
+    Ok(())
 }
 
 // ── worktree helpers ──
@@ -255,7 +277,16 @@ fn write_worktree_meta(skills_dir: &Path, meta: &SkillMetaFile) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, sync_metadata::canonical_json_bytes(meta)?)?;
+    crate::core::fail_points::hit("resolve.write_meta")?;
+    // Through a temp name and a rename, so a crash cannot leave a truncated
+    // file that stops the reindex (sm-69q.20). `.tmp.` names are swept and
+    // never committed.
+    let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::now_v7()));
+    std::fs::write(&tmp, sync_metadata::canonical_json_bytes(meta)?)?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }
 

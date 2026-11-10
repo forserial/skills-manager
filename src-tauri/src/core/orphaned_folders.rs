@@ -209,6 +209,8 @@ fn adopt_unlocked(
         description: parsed.description,
         central_path: dir.clone(),
         content_hash: content_hash::hash_directory(&dir).map_err(AppError::io)?,
+        // The user's folder: a failed adopt must never remove it.
+        created_folder: false,
     };
     // No source_ref: the folder is its own source, and a local skill with one
     // would offer to re-import itself.

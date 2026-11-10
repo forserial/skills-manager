@@ -2826,6 +2826,32 @@ pub fn store_installed_skill_unlocked(
     metadata: &InstallSourceMetadata,
     active_scenario_id: Option<&str>,
 ) -> Result<String, AppError> {
+    // A failed registration takes back the row and folder this install
+    // created, so neither is left without the other (sm-69q.20).
+    let central_path = result.central_path.to_string_lossy().to_string();
+    let had_record = store
+        .get_skill_by_central_path(&central_path)
+        .map_err(AppError::db)?
+        .is_some();
+    store_installed_skill_inner(store, result, metadata, active_scenario_id).inspect_err(|_| {
+        let inserted = (!had_record)
+            .then(|| store.get_skill_by_central_path(&central_path).ok().flatten())
+            .flatten();
+        crate::core::skill_placement::undo_new_install(
+            store,
+            inserted.as_ref().map(|s| s.id.as_str()),
+            &result.central_path,
+            result.created_folder,
+        );
+    })
+}
+
+fn store_installed_skill_inner(
+    store: &SkillStore,
+    result: &installer::InstallResult,
+    metadata: &InstallSourceMetadata,
+    active_scenario_id: Option<&str>,
+) -> Result<String, AppError> {
     let now = chrono::Utc::now().timestamp_millis();
     let central_path = result.central_path.to_string_lossy().to_string();
 
@@ -2898,6 +2924,10 @@ pub fn store_installed_skill_unlocked(
             .add_skill_to_scenario(scenario_id, &id)
             .map_err(AppError::db)?;
     }
+    // This skill's own file first: the full rewrite below fsyncs every file,
+    // and a crash during it must not leave the new folder without one.
+    crate::core::skill_placement::write_skill_metadata_unlocked(store, &id)
+        .map_err(AppError::db)?;
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
     crate::core::baseline::on_installed_unlocked(&id, &metadata.source_type, metadata.source_revision.as_deref(), &result.central_path);
 
@@ -3409,7 +3439,9 @@ pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(
         std::fs::rename(current_path, &backup_path)?;
     }
 
-    if let Err(err) = std::fs::rename(staged_path, current_path) {
+    let placed = crate::core::fail_points::hit("swap.rename")
+        .and_then(|()| std::fs::rename(staged_path, current_path));
+    if let Err(err) = placed {
         if backup_path.exists() {
             let _ = std::fs::rename(&backup_path, current_path);
         }
@@ -3417,7 +3449,20 @@ pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(
         return Err(err.into());
     }
 
-    remove_path_if_exists(&backup_path)?;
+    // The new folder is in place: the caller must go on to record it. Failing
+    // here returned before the record was updated, and left the backup (with
+    // its SKILL.md) in the library anyway (sm-69q.20).
+    let removed = crate::core::fail_points::hit("swap.remove_backup")
+        .map_err(AppError::from)
+        .and_then(|()| remove_path_if_exists(&backup_path));
+    if let Err(err) = removed {
+        log::warn!(
+            "updated {} but could not remove the old copy {}: {}",
+            current_path.display(),
+            backup_path.display(),
+            err
+        );
+    }
     Ok(())
 }
 

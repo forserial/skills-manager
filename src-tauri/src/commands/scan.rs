@@ -93,46 +93,7 @@ pub async fn import_existing_skill(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         sync_metadata::with_repo_lock("import existing skill", || {
-            let path = PathBuf::from(&source_path);
-            let resolved_name = installer::resolve_local_skill_name(&path, name.as_deref())?;
-
-            let result = installer::install_from_local(&path, Some(&resolved_name))?;
-
-            if store
-                .get_skill_by_central_path(&result.central_path.to_string_lossy())?
-                .is_some()
-            {
-                return Ok(());
-            }
-
-            let now = chrono::Utc::now().timestamp_millis();
-            let id = uuid::Uuid::new_v4().to_string();
-
-            let record = crate::core::skill_store::SkillRecord {
-                id: id.clone(),
-                name: result.name,
-                description: result.description,
-                source_type: "import".to_string(),
-                source_ref: Some(source_path),
-                source_ref_resolved: None,
-                source_subpath: None,
-                source_branch: None,
-                source_revision: None,
-                remote_revision: None,
-                central_path: result.central_path.to_string_lossy().to_string(),
-                content_hash: Some(result.content_hash),
-                enabled: true,
-                created_at: now,
-                updated_at: now,
-                status: "ok".to_string(),
-                update_status: "local_only".to_string(),
-                last_checked_at: Some(now),
-                last_check_error: None,
-            };
-
-            store.insert_skill(&record)?;
-
-            sync_metadata::write_all_from_db_unlocked(&store)
+            import_existing_skill_unlocked(&store, source_path, name)
         })
         .map_err(AppError::io)?;
 
@@ -141,71 +102,137 @@ pub async fn import_existing_skill(
     .await?
 }
 
+/// The body of [`import_existing_skill`]; the caller holds the repo lock.
+pub(crate) fn import_existing_skill_unlocked(
+    store: &SkillStore,
+    source_path: String,
+    name: Option<String>,
+) -> anyhow::Result<()> {
+    let path = PathBuf::from(&source_path);
+    let resolved_name = installer::resolve_local_skill_name(&path, name.as_deref())?;
+
+    let result = installer::install_from_local(&path, Some(&resolved_name))?;
+    let created_folder = result.created_folder;
+
+    if store
+        .get_skill_by_central_path(&result.central_path.to_string_lossy())?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let id = uuid::Uuid::new_v4().to_string();
+
+    let record = crate::core::skill_store::SkillRecord {
+        id: id.clone(),
+        name: result.name,
+        description: result.description,
+        source_type: "import".to_string(),
+        source_ref: Some(source_path),
+        source_ref_resolved: None,
+        source_subpath: None,
+        source_branch: None,
+        source_revision: None,
+        remote_revision: None,
+        central_path: result.central_path.to_string_lossy().to_string(),
+        content_hash: Some(result.content_hash),
+        enabled: true,
+        created_at: now,
+        updated_at: now,
+        status: "ok".to_string(),
+        update_status: "local_only".to_string(),
+        last_checked_at: Some(now),
+        last_check_error: None,
+    };
+
+    // Row and metadata file together, undone on failure (sm-69q.20).
+    crate::core::skill_placement::register_new_skill_unlocked(
+        &store,
+        &record,
+        created_folder,
+    )?;
+
+    sync_metadata::write_all_from_db_unlocked(&store)
+}
+
 #[tauri::command]
 pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         sync_metadata::with_repo_lock("import all discovered skills", || {
-            let discovered = store.get_all_discovered()?;
-            let groups = scanner::group_discovered(&discovered);
-
-            let mut changed = false;
-
-            for group in groups {
-                if group.imported {
-                    continue;
-                }
-                if let Some(first) = group.locations.first() {
-                    let path = PathBuf::from(&first.found_path);
-
-                    if let Ok(result) = installer::install_from_local(&path, Some(&group.name)) {
-                        if store
-                            .get_skill_by_central_path(&result.central_path.to_string_lossy())?
-                            .is_some()
-                        {
-                            continue;
-                        }
-
-                        let now = chrono::Utc::now().timestamp_millis();
-                        let id = uuid::Uuid::new_v4().to_string();
-                        let record = crate::core::skill_store::SkillRecord {
-                            id: id.clone(),
-                            name: result.name,
-                            description: result.description,
-                            source_type: "import".to_string(),
-                            source_ref: Some(first.found_path.clone()),
-                            source_ref_resolved: None,
-                            source_subpath: None,
-                            source_branch: None,
-                            source_revision: None,
-                            remote_revision: None,
-                            central_path: result.central_path.to_string_lossy().to_string(),
-                            content_hash: Some(result.content_hash),
-                            enabled: true,
-                            created_at: now,
-                            updated_at: now,
-                            status: "ok".to_string(),
-                            update_status: "local_only".to_string(),
-                            last_checked_at: Some(now),
-                            last_check_error: None,
-                        };
-                        store.insert_skill(&record)?;
-                        changed = true;
-                    }
-                }
-            }
-
-            if changed {
-                sync_metadata::write_all_from_db_unlocked(&store)?;
-            }
-
-            Ok(())
+            import_all_discovered_unlocked(&store)
         })
         .map_err(AppError::io)?;
 
         Ok(())
     })
     .await?
+}
+
+/// The body of [`import_all_discovered`]; the caller holds the repo lock.
+pub(crate) fn import_all_discovered_unlocked(store: &SkillStore) -> anyhow::Result<()> {
+    let discovered = store.get_all_discovered()?;
+    let groups = scanner::group_discovered(&discovered);
+
+    let mut changed = false;
+
+    for group in groups {
+        if group.imported {
+            continue;
+        }
+        if let Some(first) = group.locations.first() {
+            let path = PathBuf::from(&first.found_path);
+
+            if let Ok(result) = installer::install_from_local(&path, Some(&group.name)) {
+                let created_folder = result.created_folder;
+                if store
+                    .get_skill_by_central_path(&result.central_path.to_string_lossy())?
+                    .is_some()
+                {
+                    continue;
+                }
+
+                let now = chrono::Utc::now().timestamp_millis();
+                let id = uuid::Uuid::new_v4().to_string();
+                let record = crate::core::skill_store::SkillRecord {
+                    id: id.clone(),
+                    name: result.name,
+                    description: result.description,
+                    source_type: "import".to_string(),
+                    source_ref: Some(first.found_path.clone()),
+                    source_ref_resolved: None,
+                    source_subpath: None,
+                    source_branch: None,
+                    source_revision: None,
+                    remote_revision: None,
+                    central_path: result.central_path.to_string_lossy().to_string(),
+                    content_hash: Some(result.content_hash),
+                    enabled: true,
+                    created_at: now,
+                    updated_at: now,
+                    status: "ok".to_string(),
+                    update_status: "local_only".to_string(),
+                    last_checked_at: Some(now),
+                    last_check_error: None,
+                };
+                // Each skill gets its metadata file as it lands, not
+                // only after the whole loop (sm-69q.20).
+                crate::core::skill_placement::register_new_skill_unlocked(
+                    &store,
+                    &record,
+                    created_folder,
+                )?;
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        sync_metadata::write_all_from_db_unlocked(&store)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
