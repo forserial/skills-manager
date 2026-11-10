@@ -247,6 +247,29 @@ differs. Never pass `--force` on the user's behalf — report `content_changed:
 true`, say that proceeding overwrites the library copy wholesale, and let them
 decide.
 
+## Baselines
+
+A git or skills.sh skill carries a **baseline**: the upstream revision its files
+came from and a per-file manifest of what upstream shipped there. It is recorded
+on install, update and `set-source`, and lets later features tell local edits
+apart from upstream changes. `skills show` and `skills status --json` report it
+as `baseline: { revision, origin, recorded_at, file_count }`, or `null` when it
+is unknown. Recording it changes no update behaviour yet.
+
+```bash
+# Backfill skills installed before baselines existed (fetches each skill's
+# recorded source revision; network, but writes only the baseline files)
+"$SM" --json skills baseline rebuild --all
+# One skill, even if it already has a baseline
+"$SM" --json skills baseline rebuild <skill>
+```
+
+- The report counts `rebuilt`, `skipped`, `unreachable` and `failed`, and exits zero when some are unreachable. `unreachable` means the server no longer has that revision ("not our ref"): nothing is written and retrying will not help. `failed` is any other failure ("could not fetch now"): retry later.
+- `skipped` covers skills with no recorded source revision. After a backup clone every skill on the new device has none, so **run backfill on the original device**; the baseline files then travel with the library.
+- Each rebuilt skill reports `differing_files`: library files that differ from the rebuilt baseline. Backfill trusts the recorded revision, which can be older than the content when another device updated the skill, so a large count is worth a look.
+- Baselines live in `.skills-manager/fork-baseline.<skill_id>.json` and sync with the library. Never edit or delete them by hand; removing a skill removes its baseline.
+- **Known limitations.** A device running an upstream build of Skills Manager keeps these files but its updates do not touch them, so in a mixed group of devices a baseline can go stale. When an existing library first connects to a remote by clone, the remote's metadata folder replaces the local one and local baselines are dropped; those skills read `baseline: null` until rebuilt. After a library sync conflict is resolved, the baseline follows the kept content, or is dropped when that cannot be determined.
+
 ## Tag
 
 ```bash

@@ -240,6 +240,8 @@ enum SkillsCommand {
         dry_run: bool,
     },
     Tag(TagArgs),
+    /// Baselines: what upstream shipped at the revision a git skill came from.
+    Baseline(BaselineArgs),
     /// Evaluate a library skill with an evaluator skill run by an agent CLI.
     /// Progress goes to stderr; the stored evaluation is printed on success.
     Evaluate {
@@ -259,6 +261,30 @@ enum SkillsCommand {
     Evaluations {
         /// Skill ref (id / name / dir basename / central path)
         reference: String,
+    },
+}
+
+#[derive(Args, Debug)]
+struct BaselineArgs {
+    #[command(subcommand)]
+    command: BaselineCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum BaselineCommand {
+    /// Rebuild baselines by fetching each skill's recorded source revision.
+    /// Unreachable revisions are reported and write nothing; the exit code
+    /// stays zero.
+    Rebuild {
+        /// Skill ref (id / name / dir basename / central path)
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        reference: Option<String>,
+        /// Every git and skills.sh skill that has no baseline yet
+        #[arg(long)]
+        all: bool,
+        /// With --all, also rebuild skills that already have a baseline
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -465,6 +491,7 @@ struct SkillStatusReport {
     #[serde(flatten)]
     skill: SkillSummary,
     agents: Vec<SkillAgentStatus>,
+    baseline: Option<app_lib::core::baseline::BaselineSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -496,6 +523,7 @@ struct SkillDetail {
     skill_file: String,
     files: Vec<String>,
     markdown: String,
+    baseline: Option<app_lib::core::baseline::BaselineSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1024,6 +1052,20 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             print_json(&report, json);
         }
         SkillsCommand::Tag(args) => run_tag(args, store, json)?,
+        SkillsCommand::Baseline(BaselineArgs {
+            command: BaselineCommand::Rebuild { reference, all, force },
+        }) => {
+            if force && !all {
+                bail!("--force only applies with --all");
+            }
+            let ids = match reference {
+                Some(reference) => vec![resolve_skill(store, &reference)?.id],
+                None => Vec::new(),
+            };
+            let proxy = store.proxy_url();
+            let report = app_lib::core::baseline::rebuild(store, &ids, all, force, proxy.as_deref())?;
+            print_json(&report, json);
+        }
         SkillsCommand::Evaluate {
             reference,
             agent,
@@ -1202,6 +1244,7 @@ fn show_skill(store: &SkillStore, reference: &str) -> anyhow::Result<SkillDetail
         skill_file: skill_file.to_string_lossy().to_string(),
         files: collect_files(&skill_dir)?,
         markdown,
+        baseline: app_lib::core::baseline::summary_for(&skill.id),
     })
 }
 
@@ -1244,6 +1287,7 @@ fn skill_status(store: &SkillStore, reference: &str) -> anyhow::Result<SkillStat
     Ok(SkillStatusReport {
         skill: summary,
         agents,
+        baseline: app_lib::core::baseline::summary_for(&skill.id),
     })
 }
 

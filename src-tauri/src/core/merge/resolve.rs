@@ -78,6 +78,7 @@ pub fn resolve_conflict_unlocked(
             apply_keep_both(&repo, skills_dir, skill_id, theirs_commit)?;
         }
     }
+    crate::core::baseline::after_conflict_resolved_unlocked(skills_dir, skill_id, action, theirs_commit);
 
     let action_label = match action {
         ResolveAction::KeepLocal => "keep local",
