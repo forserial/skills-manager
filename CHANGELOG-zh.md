@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.47.0] - 2026-11-10
+
+### 发布概览
+- 技能库现在可以只显示你改动过的技能。
+
+### 用户可见更新
+- **已改动筛选** — 来源筛选旁新增 **已改动** 标签，显示有多少技能与上游原始版本不同；开启后只列出这些技能。它可与搜索、来源、标签以及已启用/可用筛选组合使用；没有改动过的技能时不显示。
+
+### 开发者与治理更新
+- 筛选逻辑位于 `src/lib/localStateFilter.ts` 和 `src/components/EditedFilterPill.tsx`，对应 CLI 的 `skills list --modified`。
+
 ## [1.46.0] - 2026-11-10
 
 ### 发布概览

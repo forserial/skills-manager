@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.47.0] - 2026-11-10
+
+### Release Overview
+- The Library can show only the skills you have edited.
+
+### User-facing
+- **Edited filter** — An **Edited** pill next to the source filters shows how many skills differ from what upstream shipped and, when on, lists only those. It works with search, sources, tags and Enabled/Available, and is hidden while no skill is edited.
+
+### Developer & Governance
+- The filter lives in `src/lib/localStateFilter.ts` and `src/components/EditedFilterPill.tsx`; it is the GUI side of `skills list --modified`.
+
 ## [1.46.0] - 2026-11-10
 
 ### Release Overview
