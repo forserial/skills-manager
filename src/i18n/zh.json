@@ -421,6 +421,10 @@
       "git": "Git",
       "skillssh": "skills.sh"
     },
+    "editedFilter": {
+      "label": "已改动",
+      "title": "只显示文件与上游原始版本不同的技能"
+    },
     "groupBySource": "按来源分组",
     "sourcePicker": {
       "label": "来源",

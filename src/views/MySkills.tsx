@@ -56,6 +56,8 @@ import { LocalChangeMarker } from "../components/LocalChangeMarker";
 import { useWatchedUpstreamMarkers } from "../hooks/useWatchedUpstreamMarkers"; // sm-69q.13
 import { WatchedUpstreamMarker } from "../components/WatchedUpstreamMarker";
 import { OrphanedFoldersNotice } from "../components/OrphanedFoldersNotice"; // sm-69q.16
+import { EditedFilterPill } from "../components/EditedFilterPill"; // sm-69q.24
+import { countEdited, isEdited } from "../lib/localStateFilter";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
@@ -197,6 +199,7 @@ export function MySkills() {
   // site, a local install, an import. Distinct from the Source grouping below.
   const [channelFilters, setChannelFilters] = useState<Set<string>>(new Set());
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
+  const [editedOnly, setEditedOnly] = useState(false); // sm-69q.24
   const [allTags, setAllTags] = useState<string[]>([]);
   // Tag management from the filter bar (#233): right-click a tag pill to
   // rename (dialog) or delete (confirm). Left-click stays "filter only".
@@ -300,11 +303,13 @@ export function MySkills() {
     channelFilters.size > 0 ||
     tagFilters.size > 0 ||
     sourceSelection.size > 0 ||
+    editedOnly ||
     filterMode !== "all";
   const clearFilters = () => {
     setSearch("");
     setChannelFilters(new Set());
     setTagFilters(new Set());
+    setEditedOnly(false);
     setSourceSelection(new Set());
     setFilterMode("all");
   };
@@ -349,6 +354,8 @@ export function MySkills() {
         if (!matchUntagged && !matchTag) return false;
       }
 
+      if (editedOnly && !isEdited(localMarkers[skill.id])) return false;
+
       if (!viewedPreset) return true;
 
       const enabledInPreset = skill.preset_ids.includes(viewedPreset.id);
@@ -389,7 +396,8 @@ export function MySkills() {
       sourceCandidates: candidates,
       preSelectionSourceGroups: groups,
     };
-  }, [skills, skillDisplayNames, search, channelFilters, tagFilters, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
+  }, [skills, skillDisplayNames, search, channelFilters, tagFilters, editedOnly, localMarkers, sourceSelection, filterMode, viewedPreset, presetSkillOrder]);
+  const editedCount = useMemo(() => countEdited(skills, localMarkers), [skills, localMarkers]);
 
   // Without a source selection the groups from above already describe
   // `filtered`; only a narrowing selection forces a rebuild. That rebuild must
@@ -448,6 +456,7 @@ export function MySkills() {
       [...channelFilters].sort(),
       [...tagFilters].sort(),
       [...sourceSelection].sort(),
+      editedOnly,
       filterMode,
       viewedPreset?.id ?? null,
     ]),
@@ -1448,6 +1457,7 @@ export function MySkills() {
             </>
           )}
         </div>
+        <EditedFilterPill count={editedCount} active={editedOnly} onToggle={() => setEditedOnly((on) => !on)} />
         {allTags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />

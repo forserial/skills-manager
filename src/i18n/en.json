@@ -421,6 +421,10 @@
       "git": "Git",
       "skillssh": "skills.sh"
     },
+    "editedFilter": {
+      "label": "Edited",
+      "title": "Show only skills whose files differ from what upstream shipped"
+    },
     "groupBySource": "Group by source",
     "sourcePicker": {
       "label": "Source",
