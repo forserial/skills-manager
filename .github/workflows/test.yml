@@ -22,7 +22,7 @@ jobs:
         include:
           # macOS covers the unix code paths; Windows covers the
           # cfg(windows) paths (symlink/junction sync, removal).
-          - platform: macos-latest
+          - platform: macos-15-intel
             label: macOS
           - platform: windows-latest
             label: Windows
