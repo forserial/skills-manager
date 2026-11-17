@@ -116,6 +116,8 @@ fn library_with_remote(root: &Path, name: &str, ids: &[&str]) -> (Arc<SkillStore
         git_in(root, &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()]);
     }
     let store = open_library(root, name);
+    // Both devices must use the same fixture bytes regardless of Git defaults.
+    fs::write(central_repo::skills_dir().join(".gitattributes"), "* -text\n").unwrap();
     git(GitCommand::Init, &store);
     for id in ids {
         add_skill(&store, id);

@@ -98,6 +98,8 @@ impl Upstream {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), SKILL_MD.replace("NAME", name)).unwrap();
         fs::write(dir.join("notes.md"), "notes v1\n").unwrap();
+        // Preserve the fixture's exact bytes in every checkout, including on Windows.
+        fs::write(dir.join(".gitattributes"), "* -text\n").unwrap();
         git_in(&dir, &["init", "-q", "-b", "main"]);
         git_in(&dir, &["config", "uploadpack.allowFilter", "true"]);
         git_in(&dir, &["add", "-A"]);
