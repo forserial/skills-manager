@@ -40,6 +40,8 @@ interface Props {
   toolToggles?: SkillToolToggle[] | null;
   togglingTool?: string | null;
   onToggleTool?: (tool: string, enabled: boolean) => void;
+  /** Whether `toolToggles` belong to the active preset, the only one that deploys. */
+  isActivePreset: boolean;
   projects?: Project[];
   onProjectsChanged?: () => void;
 }
@@ -51,6 +53,7 @@ export function SkillDetailPanel({
   toolToggles,
   togglingTool,
   onToggleTool,
+  isActivePreset,
   projects,
   onProjectsChanged,
 }: Props) {
@@ -74,6 +77,7 @@ export function SkillDetailPanel({
       toolToggles={toolToggles}
       togglingTool={togglingTool}
       onToggleTool={onToggleTool}
+      isActivePreset={isActivePreset}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
     />
@@ -87,6 +91,7 @@ function SkillDetailPanelContent({
   toolToggles,
   togglingTool,
   onToggleTool,
+  isActivePreset,
   projects,
   onProjectsChanged,
 }: {
@@ -96,6 +101,8 @@ function SkillDetailPanelContent({
   toolToggles?: SkillToolToggle[] | null;
   togglingTool?: string | null;
   onToggleTool?: (tool: string, enabled: boolean) => void;
+  /** Whether `toolToggles` belong to the active preset, the only one that deploys. */
+  isActivePreset: boolean;
   projects?: Project[];
   onProjectsChanged?: () => void;
 }) {
@@ -220,6 +227,7 @@ function SkillDetailPanelContent({
     key: toggle.tool,
     displayName: toggle.display_name,
     enabled: toggle.enabled,
+    deployed: toggle.deployed,
     isAvailable: toggle.installed && toggle.globally_enabled,
     disabled: !toggle.installed || !toggle.globally_enabled,
     badgeLabel: !toggle.installed
@@ -321,6 +329,7 @@ function SkillDetailPanelContent({
           items={toggleItems}
           togglingKey={togglingTool}
           onToggle={onToggleTool}
+          showPendingSync={isActivePreset}
           className="mb-4"
         />
       )}

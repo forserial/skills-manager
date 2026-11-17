@@ -173,8 +173,14 @@ fn a_project_import_keeps_its_record_through_the_next_reindex() {
     project_with_skill(&lib, "imported");
     let (agent, rel) = project_skill_args(&lib, "imported");
 
-    crate::commands::projects::import_project_skill_blocking(&lib.store, "p", &rel, &agent)
-        .unwrap();
+    crate::commands::projects::import_project_skill_to_center_internal(
+        &lib.store,
+        "p".into(),
+        rel,
+        agent,
+        true,
+    )
+    .unwrap();
     assert!(lib.root.join("imported/SKILL.md").is_file());
 
     // Nothing else writes metadata before the next start.
@@ -361,8 +367,13 @@ fn a_project_import_that_cannot_write_metadata_leaves_nothing() {
     let (agent, rel) = project_skill_args(&lib, "imported");
 
     let blocked = block_metadata();
-    let err =
-        crate::commands::projects::import_project_skill_blocking(&lib.store, "p", &rel, &agent);
+    let err = crate::commands::projects::import_project_skill_to_center_internal(
+        &lib.store,
+        "p".into(),
+        rel,
+        agent,
+        true,
+    );
     drop(blocked);
 
     assert!(err.is_err());

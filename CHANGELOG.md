@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.48.0] - 2026-11-17
+
+### Release Overview
+- Agents can manage project skills through the CLI; the Library gains clearer filters, accurate deployment status and update notes.
+
+### User-facing
+
+- **Project skills from the CLI** — Register projects, deploy skills or presets, undeploy them, and import project skills with the new `projects` commands. Every write command supports `--dry-run`. Failed imports clean up partial additions and keep existing skills in place.
+- **Deployment fixes** — Agent toggles distinguish deployed skills from pending sync. Copy deployments work across agents sharing a folder when its content matches the Library, and local scans list shared folders once.
+- **Clearer Library filters** — The Library and Add Skills drawer share channel, source and tag controls. Long tag lists fold after two rows, the drawer can filter by source, and bulk actions disclose selected skills that are not shown. The Edited filter remains available.
+- **Recovery and release notes** — Rendering failures offer error details, log export and reload. A What's new dialog shows bundled fork release notes after an update and can be reopened from Settings. The default theme follows the system.
+
+### Developer & Governance
+- Integrates upstream through `f374817`, preserving the fork's adapted-skill protections, evaluation features and updater configuration. GUI and CLI project imports share the authorized import plan and the fork's registration and metadata helpers.
+
 ## [1.47.0] - 2026-11-10
 
 ### Release Overview
