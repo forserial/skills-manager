@@ -369,6 +369,8 @@ struct Fixture {
 fn fixture(repo: &TestRepo) -> Fixture {
     let up = repo.tmp.path().join("upstream");
     write_files(&up, UPSTREAM_V1);
+    // Fetching the baseline must preserve the same bytes as the staged fixture.
+    write_files(&up, &[(".gitattributes", "* -text\n")]);
     git_ok(&up, &["init", "-q", "-b", "main"]);
     git_ok(&up, &["add", "-A"]);
     git_ok(&up, &["commit", "-qm", "v1"]);

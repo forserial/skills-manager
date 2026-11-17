@@ -311,6 +311,8 @@ fn upstream(root: &Path) -> (PathBuf, String) {
     let dir = root.join("up");
     write(&dir, "SKILL.md", "---\nname: demo\n---\nline one\nline two\n");
     write(&dir, "notes.md", "notes v1\n");
+    // Preserve the fixture's exact bytes in every checkout, including on Windows.
+    write(&dir, ".gitattributes", "* -text\n");
     git_in(&dir, &["init", "-q", "-b", "main"]);
     git_in(&dir, &["config", "uploadpack.allowFilter", "true"]);
     git_in(&dir, &["add", "-A"]);

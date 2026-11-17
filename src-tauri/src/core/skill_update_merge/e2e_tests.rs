@@ -134,6 +134,8 @@ impl Upstream {
     fn new(root: &Path, name: &str, files: &[(&str, &[u8])]) -> Self {
         let dir = root.join(name);
         write(&dir, "SKILL.md", b"---\nname: demo\n---\nA demo skill.\n");
+        // Preserve the fixture's exact bytes in every checkout, including on Windows.
+        write(&dir, ".gitattributes", b"* -text\n");
         for (rel, body) in files {
             write(&dir, rel, body);
         }

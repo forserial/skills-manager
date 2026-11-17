@@ -404,6 +404,8 @@ fn a_skill_deleted_on_one_device_is_gone_on_the_other_after_sync() {
         git(tmp.path(), &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()]);
 
         let a = Device::new(tmp.path(), "a");
+        // Both devices must use the same fixture bytes regardless of Git defaults.
+        std::fs::write(a.skills().join(".gitattributes"), "* -text\n").unwrap();
         crate::core::git_backup::init_repo(&a.skills(), "Device A").unwrap();
         a.activate();
         add_skill(&a.store, "doomed");

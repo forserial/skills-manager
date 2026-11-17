@@ -219,6 +219,8 @@ fn probe_incoming_evaluation() {
     let up = root.join("demo-up");
     write(&up, "SKILL.md", b"---\nname: demo\n---\nA demo skill.\n");
     write(&up, "notes.md", b"notes v1\n");
+    // Preserve the fixture's exact bytes in every checkout, including on Windows.
+    write(&up, ".gitattributes", b"* -text\n");
     git_in(&up, &["init", "-q", "-b", "main"]);
     git_in(&up, &["config", "uploadpack.allowFilter", "true"]);
     git_in(&up, &["add", "-A"]);
